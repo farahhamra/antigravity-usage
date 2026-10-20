@@ -13,18 +13,23 @@ export interface RequestRecord extends Usage {
   updatedAt: number;
   endedAt?: number;
   status: RequestStatus;
+  antigravity?: { conversationId: string; stepIndex: number };
+  modelUsage?: (Usage & { model: string })[];
+  usagePartial?: boolean;
 }
 export interface Totals {
   requests: number;
+  partialRequests: number;
   inputTokens: { value: number; known: number };
   outputTokens: { value: number; known: number };
   costUsd: { value: number; known: number };
 }
 const emptyTotals = (): Totals => ({
-  requests: 0, inputTokens: { value: 0, known: 0 }, outputTokens: { value: 0, known: 0 }, costUsd: { value: 0, known: 0 },
+  requests: 0, partialRequests: 0, inputTokens: { value: 0, known: 0 }, outputTokens: { value: 0, known: 0 }, costUsd: { value: 0, known: 0 },
 });
 function addRecord(totals: Totals, record: RequestRecord): void {
   totals.requests++;
+  if (record.usagePartial) totals.partialRequests++;
   for (const key of ['inputTokens', 'outputTokens', 'costUsd'] as const) {
     if (record[key] !== undefined) {
       totals[key].value += record[key];
@@ -80,6 +85,7 @@ export function parseEvent(value: unknown): TrackingEvent {
 export class Tracker {
   private records = new Map<string, RequestRecord>();
   private archived = emptyTotals();
+  private archivedAntigravityThrough = 0;
   selectedModel?: string;
   selectionSource: Source = 'manual';
   static readonly limit = 1000;
@@ -131,16 +137,47 @@ export class Tracker {
   }
 
   list(): RequestRecord[] {
-    return Array.from(this.records.values(), r => ({ ...r })).sort((a, b) => b.startedAt - a.startedAt);
+    return Array.from(this.records.values(), r => structuredClone(r)).sort((a, b) => b.startedAt - a.startedAt);
   }
-  clear(): void { this.records.clear(); this.archived = emptyTotals(); }
+  get(id: string): RequestRecord | undefined {
+    const record = this.records.get(id);
+    return record && structuredClone(record);
+  }
+  /** The built-in adapter replaces snapshots, including late final usage and resumed requests. */
+  syncAntigravity(record: RequestRecord): boolean {
+    if (!record.antigravity || record.source !== 'integration' || !record.id.startsWith('antigravity:')) throw new Error('Invalid Antigravity record.');
+    const current = this.records.get(record.id);
+    if (!current && record.startedAt <= this.archivedAntigravityThrough) return false;
+    if (current && (!current.antigravity || current.source !== record.source || current.startedAt !== record.startedAt)) throw new Error('Request ID already exists.');
+    if (current && record.updatedAt < current.updatedAt) return false;
+    const next = structuredClone(record);
+    // A delayed/partial backend snapshot must not erase already reported counts.
+    const keys = ['inputTokens', 'outputTokens', 'costUsd'] as const;
+    if (current && keys.some(key => current[key] !== undefined && (next[key] === undefined || next[key]! < current[key]!))) {
+      for (const key of keys) {
+        if (current[key] === undefined) delete next[key];
+        else next[key] = current[key];
+      }
+      next.usagePartial = true;
+      next.modelUsage = current.modelUsage;
+    }
+    if (JSON.stringify(current) === JSON.stringify(next)) return false;
+    if (!current && next.status === 'running' && this.list().filter(r => r.status === 'running').length >= 100) return false;
+    this.records.set(next.id, next);
+    if (next.model !== 'Awaiting model' && (!this.selectedModel || next.startedAt >= Math.max(0, ...this.list().filter(r => r.id !== next.id).map(r => r.startedAt)))) {
+      this.selectedModel = next.model; this.selectionSource = 'integration';
+    }
+    this.prune();
+    return true;
+  }
+  clear(): void { this.records.clear(); this.archived = emptyTotals(); this.archivedAntigravityThrough = 0; }
   totals(): Totals {
     const totals = structuredClone(this.archived);
     for (const record of this.records.values()) addRecord(totals, record);
     return totals;
   }
   serialize(): unknown {
-    return { version: 1, selectedModel: this.selectedModel, selectionSource: this.selectionSource, archived: structuredClone(this.archived), records: this.list() };
+    return { version: 1, selectedModel: this.selectedModel, selectionSource: this.selectionSource, archived: structuredClone(this.archived), archivedAntigravityThrough: this.archivedAntigravityThrough, records: this.list() };
   }
   restore(raw: unknown): void {
     const data = object(raw);
@@ -164,6 +201,19 @@ export class Tracker {
         id: label(r.id, 'id'), model: label(r.model, 'model'), source: r.source as Source,
         startedAt, updatedAt, endedAt, status: r.status === 'running' ? 'interrupted' : r.status as RequestStatus, ...usage(r),
       };
+      if (r.antigravity !== undefined) {
+        const a = object(r.antigravity);
+        if (r.source !== 'integration' || !record.id.startsWith('antigravity:')
+          || typeof a.conversationId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(a.conversationId)
+          || !Number.isSafeInteger(a.stepIndex) || (a.stepIndex as number) < 0) throw new Error('Invalid saved Antigravity request.');
+        record.antigravity = { conversationId: a.conversationId, stepIndex: a.stepIndex as number };
+        if (r.usagePartial !== undefined && typeof r.usagePartial !== 'boolean') throw new Error('Invalid usage coverage.');
+        record.usagePartial = r.usagePartial as boolean | undefined;
+        if (r.modelUsage !== undefined) {
+          if (!Array.isArray(r.modelUsage) || r.modelUsage.length > 100) throw new Error('Invalid model usage.');
+          record.modelUsage = r.modelUsage.map(item => { const m = object(item); return { model: label(m.model, 'model'), ...usage(m) }; });
+        }
+      }
       if (restored.has(record.id)) throw new Error('Duplicate saved request ID.');
       restored.set(record.id, record);
     }
@@ -173,6 +223,9 @@ export class Tracker {
       const a = object(data.archived);
       if (!Number.isSafeInteger(a.requests) || (a.requests as number) < 0) throw new Error('Invalid archived totals.');
       archived.requests = a.requests as number;
+      const partial = a.partialRequests ?? 0;
+      if (!Number.isSafeInteger(partial) || (partial as number) < 0 || (partial as number) > archived.requests) throw new Error('Invalid partial usage count.');
+      archived.partialRequests = partial as number;
       for (const key of ['inputTokens', 'outputTokens', 'costUsd'] as const) {
         const stat = object(a[key]);
         if (!Number.isSafeInteger(stat.known) || (stat.known as number) < 0 || (stat.known as number) > archived.requests
@@ -182,8 +235,10 @@ export class Tracker {
         archived[key] = { value: stat.value, known: stat.known as number };
       }
     }
+    const archivedAntigravityThrough = data.archivedAntigravityThrough === undefined ? 0 : timestamp(data.archivedAntigravityThrough);
     this.records = restored;
     this.archived = archived;
+    this.archivedAntigravityThrough = archivedAntigravityThrough;
     this.selectedModel = selectedModel;
     this.selectionSource = data.selectionSource === 'integration' ? 'integration' : 'manual';
     this.prune();
@@ -192,6 +247,7 @@ export class Tracker {
     const completed = this.list().filter(r => r.status !== 'running');
     for (const record of completed.slice(Tracker.limit)) {
       addRecord(this.archived, record);
+      if (record.antigravity) this.archivedAntigravityThrough = Math.max(this.archivedAntigravityThrough, record.startedAt);
       this.records.delete(record.id);
     }
   }

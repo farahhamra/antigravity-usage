@@ -1,8 +1,8 @@
 {
   "name": "antigravity-usage",
   "displayName": "Antigravity Usage",
-  "description": "A local model-usage dashboard and request timer. Automatic Antigravity integration is under development.",
-  "version": "0.1.0",
+  "description": "Live request activity, reported input/output tokens, and a local usage dashboard for Google Antigravity.",
+  "version": "0.2.0",
   "publisher": "farahhamra",
   "license": "UNLICENSED",
   "repository": {
@@ -17,7 +17,7 @@
     "Other"
   ],
   "extensionKind": [
-    "ui"
+    "workspace"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [

@@ -4,6 +4,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Tracker } from './tracker';
 import { dashboardHtml } from './dashboard';
+import { AntigravityMonitor, LiveStatus } from './antigravity/monitor';
+import { TARGET_ID } from './antigravity/transport';
 
 export interface UsageApi {
   version: 1;
@@ -26,6 +28,7 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
   }
   let panel: vscode.WebviewPanel | undefined;
   let integrationSeen = false;
+  let liveStatus: LiveStatus = { state: 'waiting', usage: 'waiting' };
   let persistQueue = Promise.resolve();
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   status.command = 'antigravityUsage.openDashboard';
@@ -40,11 +43,11 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
     status.text = latest
       ? `$(pulse) ${latest.model.replace(/[\r\n]/g, ' ')} · ${Math.max(0, Math.floor((Date.now() - latest.startedAt) / 1000))}s${active.length > 1 ? ` (${active.length})` : ''}`
       : '$(graph) Antigravity Usage';
-    status.tooltip = latest ? 'Tracking request duration. Open the usage dashboard.' : 'Open usage dashboard. Automatic Antigravity integration is pending.';
+    status.tooltip = latest ? 'Tracking request duration. Open the usage dashboard.' : `Antigravity connection: ${liveStatus.state}. Open usage dashboard.`;
     if (panel) void panel.webview.postMessage({
-      type: 'snapshot', records, selectedModel: tracker.selectedModel,
-      selectionSource: tracker.selectionSource, integrationSeen, now: Date.now(),
-      targetInstalled: !!vscode.extensions.getExtension('gogle.google-antigravity'),
+      type: 'snapshot', records, selectedModel: latest?.model ?? tracker.selectedModel,
+      selectionSource: latest?.source ?? tracker.selectionSource, integrationSeen, liveStatus, now: Date.now(),
+      targetInstalled: !!vscode.extensions.getExtension(TARGET_ID),
       totals: tracker.totals(),
     });
   }
@@ -96,14 +99,16 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
   async function clear(): Promise<void> {
     const answer = await vscode.window.showWarningMessage('Delete all local usage history and active timers?', { modal: true }, 'Delete history');
     if (answer !== 'Delete history') return;
+    monitor.reset();
     tracker.clear();
     storageHealthy = true;
+    monitor.setPaused(false);
     await save();
     refresh();
   }
   function inspectIntegration(): void {
-    const target = vscode.extensions.getExtension('gogle.google-antigravity');
-    output.appendLine('Integration target: gogle.google-antigravity');
+    const target = vscode.extensions.getExtension(TARGET_ID);
+    output.appendLine(`Integration target: ${TARGET_ID}`);
     if (!target) {
       output.appendLine('Target extension is not installed in this VS Code window.');
     } else {
@@ -111,7 +116,8 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
       output.appendLine(`Active: ${target.isActive}`);
       const exports = target.isActive ? target.exports : undefined;
       output.appendLine(`Public API keys: ${exports && typeof exports === 'object' ? Object.keys(exports).join(', ') || '(none)' : '(not available)'}`);
-      output.appendLine('Automatic collection is pending a verified API or log adapter.');
+      output.appendLine(`Local activity connection: ${liveStatus.state}. Usage metadata: ${liveStatus.usage}.`);
+      output.appendLine('Open Antigravity and send a new request. This observer does not activate it or read account credentials.');
     }
     output.show(true);
   }
@@ -147,8 +153,25 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
   for (const [name, action] of Object.entries(commands)) {
     context.subscriptions.push(vscode.commands.registerCommand(`antigravityUsage.${name}`, () => run(action)));
   }
-  const timer = setInterval(refresh, 1000);
+  const monitor = new AntigravityMonitor({
+    tracker, target: () => vscode.extensions.getExtension(TARGET_ID),
+    status: value => { liveStatus = value; refresh(); },
+    changed: () => {
+      if (!storageHealthy) return;
+      refresh();
+      void save().catch(() => {
+        // Avoid repeating backend errors or accidentally exposing response payloads.
+        monitor.setPaused(true);
+        output.appendLine('Automatic tracking paused because local history could not be saved. Reload the window to retry.');
+        liveStatus = { state: 'paused', usage: 'unavailable' }; refresh();
+      });
+    },
+  });
+  monitor.setPaused(!storageHealthy);
+  context.subscriptions.push(monitor);
+  const timer = setInterval(() => { refresh(); void monitor.tick(); }, 1000);
   context.subscriptions.push({ dispose: () => { clearInterval(timer); panel?.dispose(); } });
+  void monitor.tick();
   refresh();
   return {
     version: 1,

@@ -18,8 +18,8 @@ function dashboard() {
     postMessage: (message: unknown) => messages.push(message), getState: () => undefined, setState: () => undefined,
   });
   dom.window.eval(readFileSync(join(process.cwd(), 'media/dashboard.js'), 'utf8'));
-  const send = (tracker: Tracker, now: number, integrationSeen = true) => dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
-    data: { type: 'snapshot', records: tracker.list(), totals: tracker.totals(), now, selectedModel: tracker.selectedModel, selectionSource: tracker.selectionSource, integrationSeen },
+  const send = (tracker: Tracker, now: number, integrationSeen = true, liveStatus?: { state: string; usage: string }) => dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+    data: { type: 'snapshot', records: tracker.list(), totals: tracker.totals(), now, selectedModel: tracker.selectedModel, selectionSource: tracker.selectionSource, integrationSeen, liveStatus },
   }));
   return { dom, send, messages, text: (id: string) => dom.window.document.getElementById(id)!.textContent };
 }
@@ -53,7 +53,7 @@ test('manual timer shows unavailable tokens, and all-history selection includes 
     select.value = 'all'; select.dispatchEvent(new page.dom.window.Event('change'));
     assert.equal(page.text('requests'), '1'); assert.equal(page.text('average'), '5s');
     assert.match(page.text('history')!, /— \/ —/);
-    assert.match(page.text('connection')!, /integration pending/);
+    assert.match(page.text('connection')!, /Waiting for Antigravity/);
   } finally { page.dom.window.close(); }
 });
 
@@ -83,5 +83,30 @@ test('labels partial usage totals and preserves legitimate zero usage', () => {
     assert.equal(page.text('input'), '0');
     assert.match(page.text('input-coverage')!, /1 of 2 requests · partial total/);
     assert.equal(page.text('output'), '—');
+  } finally { page.dom.window.close(); }
+});
+
+test('renders automatic connection states, incomplete metadata, and per-model splits for one turn', () => {
+  const page = dashboard();
+  try {
+    const tracker = new Tracker(); const now = Date.now();
+    tracker.syncAntigravity({ id: 'antigravity:test', source: 'integration', model: 'Claude', startedAt: now - 8000, updatedAt: now,
+      status: 'completed', endedAt: now, antigravity: { conversationId: '12345678-1234-1234-1234-123456789abc', stepIndex: 0 },
+      inputTokens: 150, outputTokens: 30, usagePartial: true,
+      modelUsage: [{ model: 'Gemini', inputTokens: 100, outputTokens: 20 }, { model: 'Claude', inputTokens: 50, outputTokens: 10 }],
+    });
+    page.send(tracker, now, false, { state: 'connected', usage: 'available' });
+    assert.match(page.text('connection')!, /Live Antigravity activity connected/);
+    assert.match(page.text('model-source')!, /REPORTED MODEL/);
+    assert.match(page.text('lifetime-input-coverage')!, /incomplete/);
+    assert.match(page.text('history')!, /Gemini \+ Claude/);
+    const rows = [...page.dom.window.document.querySelectorAll('#models tr')];
+    assert.equal(rows.length, 2);
+    const gemini = rows.find(row => row.textContent!.includes('Gemini'))!;
+    assert.equal(gemini.children[2]!.childNodes[0]!.textContent, '100');
+    page.send(tracker, now, false, { state: 'connected', usage: 'unavailable' });
+    assert.match(page.text('connection-detail')!, /token metadata could not be read/);
+    page.send(tracker, now, false, { state: 'retrying', usage: 'unavailable' });
+    assert.match(page.text('connection')!, /disconnected/);
   } finally { page.dom.window.close(); }
 });

@@ -19,7 +19,7 @@ function activate(saved?: unknown) {
     StatusBarAlignment: { Right: 1 }, ViewColumn: { One: 1 },
     Uri: { joinPath: (_base: unknown, ...parts: string[]) => parts.join('/'), file: (path: string) => path },
     commands: { registerCommand: (id: string, fn: () => Promise<void>) => { commands.set(id, fn); return disposable; } },
-    extensions: { getExtension: (id: string) => id === 'gogle.google-antigravity' ? { packageJSON: { version: '1.0' }, isActive: false } : undefined },
+    extensions: { getExtension: (id: string) => id === 'google.google-antigravity' ? { packageJSON: { version: '1.8.0' }, isActive: false } : undefined },
     window: {
       createOutputChannel: () => ({ ...disposable, appendLine: (message: string) => log.push(message), show() {} }),
       createStatusBarItem: () => ({ ...disposable, show() {} }),
@@ -42,7 +42,7 @@ function activate(saved?: unknown) {
     exports, Buffer, Date: class extends Date { static now() { return now; } },
     setInterval: () => 1, clearInterval: () => undefined,
     require: (name: string) => name === 'vscode' ? vscode : name === './dashboard'
-      ? { dashboardHtml: () => '<html></html>' } : name === './tracker' ? require('../src/tracker') : require(name),
+      ? { dashboardHtml: () => '<html></html>' } : name.startsWith('./') ? require(`../src/${name.slice(2)}`) : require(name),
   });
   const api = exports.activate({
     subscriptions, extensionUri: '/extension',
