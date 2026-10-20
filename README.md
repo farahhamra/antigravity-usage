@@ -108,4 +108,6 @@ The latest 1,000 finished requests and up to 100 active requests are retained. O
 
 After a restart or disconnect, unfinished automatic requests become **interrupted**. Newer backend activity can resume them; a stale saved RUNNING flag cannot. Known tokens are preserved, but a completion time is not invented. Clearing history establishes a new observation boundary to prevent old requests reappearing. Corrupt saved history is preserved until explicitly cleared.
 
-Ideas for later: quota/reset indicators, usage alerts, cost estimates with configurable prices, and workspace/session breakdowns—each depending on available provider data.
+See the [roadmap](ROADMAP.md) for saved feature requests, including live model usage status and a monthly contributions-style activity calendar with a subscription start marker.
+
+Other ideas for later: quota/reset indicators, usage alerts, cost estimates with configurable prices, and workspace/session breakdowns—each depending on available provider data.
