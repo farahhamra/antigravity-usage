@@ -1,0 +1,84 @@
+{
+  "name": "antigravity-usage",
+  "displayName": "Antigravity Usage",
+  "description": "A local model-usage dashboard and request timer. Automatic Antigravity integration is under development.",
+  "version": "0.1.0",
+  "publisher": "farahhamra",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/farahhamra/antigravity-usage.git"
+  },
+  "engines": {
+    "vscode": "^1.95.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": true
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "antigravityUsage.openDashboard",
+        "title": "Antigravity Usage: Open Dashboard"
+      },
+      {
+        "command": "antigravityUsage.selectModel",
+        "title": "Antigravity Usage: Select Model for Manual Timer"
+      },
+      {
+        "command": "antigravityUsage.startTimer",
+        "title": "Antigravity Usage: Start Manual Request Timer"
+      },
+      {
+        "command": "antigravityUsage.finishTimer",
+        "title": "Antigravity Usage: Finish Manual Request Timer"
+      },
+      {
+        "command": "antigravityUsage.cancelTimer",
+        "title": "Antigravity Usage: Cancel Manual Request Timer"
+      },
+      {
+        "command": "antigravityUsage.exportData",
+        "title": "Antigravity Usage: Export Usage JSON"
+      },
+      {
+        "command": "antigravityUsage.clearData",
+        "title": "Antigravity Usage: Clear Usage History"
+      },
+      {
+        "command": "antigravityUsage.inspectIntegration",
+        "title": "Antigravity Usage: Inspect Antigravity Integration"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test .test/test/*.test.js",
+    "vscode:prepublish": "npm run compile",
+    "package": "node -e \"require('node:fs').mkdirSync('artifacts', { recursive: true })\" && vsce package --no-dependencies --skip-license --out artifacts/antigravity-usage.vsix"
+  },
+  "devDependencies": {
+    "@types/jsdom": "21.1.7",
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.95.0",
+    "@vscode/vsce": "4.0.0",
+    "jsdom": "26.1.0",
+    "typescript": "5.9.3"
+  }
+}
