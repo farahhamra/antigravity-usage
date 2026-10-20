@@ -1,0 +1,52 @@
+name: Attach release installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  attach-installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Verify release version
+        run: |
+          node <<'JS'
+          const version = require('./package.json').version;
+          if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(version)
+              || process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error('The release tag must match the extension version.');
+          }
+          JS
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run package
+      - name: Attach VSIX to existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          asset="artifacts/antigravity-usage-${RELEASE_TAG#v}.vsix"
+          cp artifacts/antigravity-usage.vsix "$asset"
+          gh release upload "$RELEASE_TAG" "$asset" --repo "$GITHUB_REPOSITORY"
