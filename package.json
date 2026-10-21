@@ -2,7 +2,7 @@
   "name": "antigravity-usage",
   "displayName": "Antigravity Usage",
   "description": "Live request activity, reported input/output tokens, and a local usage dashboard for Google Antigravity.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "farahhamra",
   "license": "UNLICENSED",
   "repository": {
@@ -62,8 +62,37 @@
       {
         "command": "antigravityUsage.inspectIntegration",
         "title": "Antigravity Usage: Inspect Antigravity Integration"
+      },
+      {
+        "command": "antigravityUsage.setSubscriptionDate",
+        "title": "Antigravity Usage: Set Subscription Start Date"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Antigravity Usage",
+      "properties": {
+        "antigravityUsage.subscriptionStartDate": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Subscription start date (YYYY-MM-DD) for the activity calendar. Leave blank to hide the marker."
+        },
+        "antigravityUsage.subscriptionMarker": {
+          "type": "string",
+          "enum": [
+            "monthly",
+            "startDate"
+          ],
+          "enumDescriptions": [
+            "Repeat on the subscription day each month; use the last day of shorter months.",
+            "Mark only the original subscription start date."
+          ],
+          "default": "monthly",
+          "scope": "application",
+          "description": "How the subscription date appears on the monthly activity calendar."
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "tsc -p tsconfig.json",

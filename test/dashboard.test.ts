@@ -13,15 +13,16 @@ function dashboard() {
   vm.runInNewContext(compiled, { exports: exported, require: (name: string) => name === 'vscode' ? vscode : require(name) });
   const html = exported.dashboardHtml({ asWebviewUri: (uri: string) => uri, cspSource: 'test-resource:' }, {});
   const messages: unknown[] = [];
+  let viewState: any;
   const dom = new JSDOM(html, { runScripts: 'outside-only' });
   (dom.window as any).acquireVsCodeApi = () => ({
-    postMessage: (message: unknown) => messages.push(message), getState: () => undefined, setState: () => undefined,
+    postMessage: (message: unknown) => messages.push(message), getState: () => viewState, setState: (value: unknown) => { viewState = value; },
   });
   dom.window.eval(readFileSync(join(process.cwd(), 'media/dashboard.js'), 'utf8'));
-  const send = (tracker: Tracker, now: number, integrationSeen = true, liveStatus?: { state: string; usage: string }) => dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
-    data: { type: 'snapshot', records: tracker.list(), totals: tracker.totals(), now, selectedModel: tracker.selectedModel, selectionSource: tracker.selectionSource, integrationSeen, liveStatus },
+  const send = (tracker: Tracker, now: number, integrationSeen = true, liveStatus?: { state: string; usage: string }, extra: Record<string, unknown> = {}) => dom.window.dispatchEvent(new dom.window.MessageEvent('message', {
+    data: { type: 'snapshot', records: tracker.list(), totals: tracker.totals(), now, selectedModel: tracker.selectedModel, selectionSource: tracker.selectionSource, integrationSeen, liveStatus, ...extra },
   }));
-  return { dom, send, messages, text: (id: string) => dom.window.document.getElementById(id)!.textContent };
+  return { dom, send, messages, viewState: () => viewState, text: (id: string) => dom.window.document.getElementById(id)!.textContent };
 }
 
 test('renders overall totals, cumulative live usage, and per-request input/output tokens', () => {
@@ -108,5 +109,96 @@ test('renders automatic connection states, incomplete metadata, and per-model sp
     assert.match(page.text('connection-detail')!, /token metadata could not be read/);
     page.send(tracker, now, false, { state: 'retrying', usage: 'unavailable' });
     assert.match(page.text('connection')!, /disconnected/);
+  } finally { page.dom.window.close(); }
+});
+
+test('monthly heatmap counts local calendar days, navigates years, and preserves its selected month', () => {
+  const page = dashboard();
+  try {
+    const tracker = new Tracker(); const now = new Date(2026, 11, 21, 12).getTime();
+    tracker.apply({ type: 'start', requestId: 'a', model: 'A', at: new Date(2026, 11, 1, 0, 15).getTime() }, 'manual');
+    tracker.apply({ type: 'start', requestId: 'b', model: 'A', at: new Date(2026, 10, 30, 23, 50).getTime() }, 'manual');
+    page.send(tracker, now);
+    const doc = page.dom.window.document;
+    assert.equal(doc.querySelectorAll('.calendar-day').length, 31);
+    const cell = doc.querySelector('[data-date="2026-12-01"]') as HTMLButtonElement;
+    assert.equal(cell.dataset.count, '1'); assert.match(cell.className, /heat-4/);
+    cell.click(); cell.focus();
+    assert.match(page.text('activity-detail')!, /1 request/);
+    const focused = doc.querySelector('[data-date="2026-12-01"]') as HTMLButtonElement; focused.focus();
+    page.send(tracker, now + 1000);
+    assert.equal(doc.activeElement, focused); // A timer tick must not replace focused calendar cells.
+    doc.getElementById('calendar-next')!.click();
+    assert.match(page.text('calendar-month')!, /January 2027/);
+    assert.equal(page.viewState().calendarMonth, '2027-01');
+    page.send(tracker, now + 2000); assert.match(page.text('calendar-month')!, /January 2027/);
+    doc.getElementById('calendar-today')!.click(); assert.match(page.text('calendar-month')!, /December 2026/);
+  } finally { page.dom.window.close(); }
+});
+
+test('subscription markers repeat monthly, clamp the 31st in leap February, and do not appear before subscription', () => {
+  const page = dashboard();
+  try {
+    const tracker = new Tracker(); const now = new Date(2024, 1, 20, 12).getTime();
+    const subscription = { startDate: '2024-01-31', marker: 'monthly' };
+    page.send(tracker, now, true, undefined, { subscription });
+    const doc = page.dom.window.document;
+    assert.equal(doc.querySelectorAll('.calendar-day').length, 29);
+    assert.equal((doc.querySelector('.subscription-day') as HTMLElement).dataset.date, '2024-02-29');
+    doc.getElementById('calendar-prev')!.click();
+    assert.equal((doc.querySelector('.subscription-day') as HTMLElement).dataset.date, '2024-01-31');
+    assert.match(doc.querySelector('.subscription-day')!.getAttribute('aria-label')!, /Subscription started/);
+    doc.getElementById('calendar-prev')!.click(); assert.equal(doc.querySelectorAll('.subscription-day').length, 0);
+    doc.getElementById('calendar-today')!.click();
+    page.send(tracker, now, true, undefined, { subscription: { ...subscription, marker: 'startDate' } });
+    assert.equal(doc.querySelectorAll('.subscription-day').length, 0);
+    doc.getElementById('subscription')!.click(); assert.equal(JSON.stringify(page.messages.at(-1)), '{"action":"subscription"}');
+  } finally { page.dom.window.close(); }
+});
+
+test('non-leap February has 28 days and a recurring marker on the last day', () => {
+  const page = dashboard();
+  try {
+    page.send(new Tracker(), new Date(2025, 1, 10, 12).getTime(), true, undefined, { subscription: { startDate: '2024-01-31', marker: 'monthly' } });
+    assert.equal(page.dom.window.document.querySelectorAll('.calendar-day').length, 28);
+    assert.equal((page.dom.window.document.querySelector('.subscription-day') as HTMLElement).dataset.date, '2025-02-28');
+  } finally { page.dom.window.close(); }
+});
+
+test('quota cards show actual remaining/used percentages, exhausted limits, resets and stale data', () => {
+  const page = dashboard();
+  try {
+    const now = Date.now();
+    const quota = { state: 'ready', refreshing: false, updatedAt: now, entries: [
+      { label: '<img src=x onerror=alert(1)>', scope: 'model', windows: [{ label: 'Model limit', remainingFraction: 0.75, resetAt: now + 3600000 }] },
+      { label: 'Claude', scope: 'model', windows: [{ label: 'Model limit', remainingFraction: 0 }] },
+      { label: 'Other', scope: 'model', windows: [{ label: 'Model limit' }] },
+      { label: 'Shared premium', scope: 'group', windows: [{ label: 'Weekly', remainingFraction: 0.1, resetAt: now - 1 }] },
+    ] };
+    page.send(new Tracker(), now, true, undefined, { quota });
+    assert.match(page.text('quotas')!, /75% remaining/); assert.match(page.text('quotas')!, /25% used/);
+    assert.match(page.text('quotas')!, /Limit reached/); assert.match(page.text('quotas')!, /Quota not reported/);
+    assert.match(page.text('quotas')!, /Shared limit/); assert.match(page.text('quotas')!, /Reset due/);
+    assert.equal((page.dom.window.document.querySelector('.quota-window meter') as HTMLMeterElement).value, 25);
+    assert.equal(page.dom.window.document.querySelectorAll('img').length, 0);
+    page.send(new Tracker(), now + 100000, true, undefined, { quota });
+    assert.match(page.text('quota-status')!, /Last known limits/);
+    assert.match(page.text('quotas')!, /75% remaining/); // Never silently reset cached limits.
+    page.dom.window.document.getElementById('refreshQuota')!.click();
+    assert.equal(JSON.stringify(page.messages.at(-1)), '{"action":"refreshQuota"}');
+  } finally { page.dom.window.close(); }
+});
+
+test('interrupted durations remain fixed in history after reload and later dashboard ticks', () => {
+  const page = dashboard();
+  try {
+    const tracker = new Tracker(); const now = Date.now();
+    tracker.syncAntigravity({ id: 'antigravity:interrupted', source: 'integration', model: 'Gemini', startedAt: now - 9000,
+      updatedAt: now - 4000, endedAt: now - 4000, status: 'interrupted', inputTokens: 100, outputTokens: 20,
+      antigravity: { conversationId: '12345678-1234-1234-1234-123456789abc', stepIndex: 0 } });
+    const restored = new Tracker(); restored.restore(tracker.serialize());
+    page.send(restored, now); const before = page.text('history');
+    assert.match(before!, /5s/); assert.match(before!, /100 \/ 20/);
+    page.send(restored, now + 60000); assert.equal(page.text('history'), before);
   } finally { page.dom.window.close(); }
 });

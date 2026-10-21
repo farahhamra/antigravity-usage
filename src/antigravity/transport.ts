@@ -84,6 +84,19 @@ export function subscribe(connection: Connection, onMessage: (value: unknown) =>
 
 /** Fixed read-only RPC; no arbitrary URL/method, redirects, process scans, or credential files. */
 export function generatorMetadata(connection: Connection, cascadeId: string, signal: AbortSignal): Promise<unknown> {
+  return unary(connection, 'GetCascadeTrajectoryGeneratorMetadata', { cascadeId }, signal);
+}
+
+export function userStatus(connection: Connection, signal: AbortSignal): Promise<unknown> {
+  return unary(connection, 'GetUserStatus', { metadata: { ideName: 'antigravity' } }, signal);
+}
+
+export function quotaSummary(connection: Connection, signal: AbortSignal): Promise<unknown> {
+  return unary(connection, 'RetrieveUserQuotaSummary', {}, signal);
+}
+
+/** Keep the read-only method allowlist closed to callers. */
+function unary(connection: Connection, method: 'GetCascadeTrajectoryGeneratorMetadata' | 'GetUserStatus' | 'RetrieveUserQuotaSummary', body: unknown, signal: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let done = false;
     let response: http.IncomingMessage | undefined;
@@ -91,10 +104,10 @@ export function generatorMetadata(connection: Connection, cascadeId: string, sig
       if (done) return;
       done = true; clearTimeout(timeout); signal.removeEventListener('abort', abort);
       request.destroy(); response?.destroy();
-      if (failed) reject(new Error('Antigravity usage metadata is unavailable.'));
+      if (failed) reject(new Error('Antigravity usage data is unavailable.'));
       else resolve(value);
     };
-    const request = http.request(options(connection, 'GetCascadeTrajectoryGeneratorMetadata'), res => {
+    const request = http.request(options(connection, method), res => {
       response = res;
       if (res.statusCode !== 200 || !/^application\/json(?:;|$)/i.test(res.headers['content-type'] ?? '')) { finish(undefined, true); return; }
       const chunks: Buffer[] = []; let size = 0;
@@ -115,6 +128,6 @@ export function generatorMetadata(connection: Connection, cascadeId: string, sig
     signal.addEventListener('abort', abort, { once: true });
     request.on('error', abort);
     if (signal.aborted) abort();
-    else request.end(JSON.stringify({ cascadeId }));
+    else request.end(JSON.stringify(body));
   });
 }

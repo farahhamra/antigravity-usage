@@ -51,7 +51,7 @@ export function summary(conversationId: string, raw: unknown, now: number): Summ
   } else return;
   return {
     id: `antigravity:${conversationId}:${startedAt}:${stepIndex}`, conversationId, stepIndex, startedAt, updatedAt, status,
-    ...(['completed', 'cancelled', 'failed'].includes(status) ? { endedAt: updatedAt } : {}),
+    ...(status !== 'running' ? { endedAt: updatedAt } : {}),
   };
 }
 

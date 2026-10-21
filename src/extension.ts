@@ -6,6 +6,8 @@ import { Tracker } from './tracker';
 import { dashboardHtml } from './dashboard';
 import { AntigravityMonitor, LiveStatus } from './antigravity/monitor';
 import { TARGET_ID } from './antigravity/transport';
+import { QuotaMonitor, QuotaSnapshot } from './antigravity/quota';
+import { subscriptionDate } from './settings';
 
 export interface UsageApi {
   version: 1;
@@ -29,6 +31,7 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
   let panel: vscode.WebviewPanel | undefined;
   let integrationSeen = false;
   let liveStatus: LiveStatus = { state: 'waiting', usage: 'waiting' };
+  let quota: QuotaSnapshot = { state: 'waiting', entries: [], refreshing: false };
   let persistQueue = Promise.resolve();
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   status.command = 'antigravityUsage.openDashboard';
@@ -44,11 +47,16 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
       ? `$(pulse) ${latest.model.replace(/[\r\n]/g, ' ')} · ${Math.max(0, Math.floor((Date.now() - latest.startedAt) / 1000))}s${active.length > 1 ? ` (${active.length})` : ''}`
       : '$(graph) Antigravity Usage';
     status.tooltip = latest ? 'Tracking request duration. Open the usage dashboard.' : `Antigravity connection: ${liveStatus.state}. Open usage dashboard.`;
+    const config = vscode.workspace.getConfiguration('antigravityUsage');
     if (panel) void panel.webview.postMessage({
       type: 'snapshot', records, selectedModel: latest?.model ?? tracker.selectedModel,
       selectionSource: latest?.source ?? tracker.selectionSource, integrationSeen, liveStatus, now: Date.now(),
       targetInstalled: !!vscode.extensions.getExtension(TARGET_ID),
-      totals: tracker.totals(),
+      totals: tracker.totals(), quota,
+      subscription: {
+        startDate: subscriptionDate(config.get('subscriptionStartDate')),
+        marker: config.get('subscriptionMarker') === 'startDate' ? 'startDate' : 'monthly',
+      },
     });
   }
   async function save(): Promise<void> {
@@ -96,6 +104,19 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
     });
     if (uri) await vscode.workspace.fs.writeFile(uri, Buffer.from(JSON.stringify(storageHealthy ? tracker.serialize() : previous, null, 2)));
   }
+  async function setSubscriptionDate(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('antigravityUsage');
+    const value = await vscode.window.showInputBox({
+      title: 'Subscription start date', value: config.get<string>('subscriptionStartDate', ''),
+      prompt: 'Enter YYYY-MM-DD. Leave blank to remove the calendar marker.', placeHolder: 'YYYY-MM-DD',
+      validateInput: value => !value.trim() || subscriptionDate(value.trim()) ? undefined : 'Enter a valid calendar date as YYYY-MM-DD.',
+    });
+    if (value === undefined) return;
+    const date = value.trim();
+    if (date && !subscriptionDate(date)) throw new Error('Enter a valid subscription date as YYYY-MM-DD.');
+    await config.update('subscriptionStartDate', date, vscode.ConfigurationTarget.Global);
+    refresh();
+  }
   async function clear(): Promise<void> {
     const answer = await vscode.window.showWarningMessage('Delete all local usage history and active timers?', { modal: true }, 'Delete history');
     if (answer !== 'Delete history') return;
@@ -117,12 +138,14 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
       const exports = target.isActive ? target.exports : undefined;
       output.appendLine(`Public API keys: ${exports && typeof exports === 'object' ? Object.keys(exports).join(', ') || '(none)' : '(not available)'}`);
       output.appendLine(`Local activity connection: ${liveStatus.state}. Usage metadata: ${liveStatus.usage}.`);
+      output.appendLine(`Model limits: ${quota.state}.`);
       output.appendLine('Open Antigravity and send a new request. This observer does not activate it or read account credentials.');
     }
     output.show(true);
   }
   const actions: Record<string, () => void | Promise<unknown>> = {
     select: selectModel, start, finish: () => finish(), cancel: () => finish(true), export: exportData, clear, inspect: inspectIntegration,
+    subscription: setSubscriptionDate, refreshQuota: () => quotaMonitor.tick(true),
   };
   async function run(action: () => void | Promise<unknown>): Promise<void> {
     try {
@@ -142,13 +165,19 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
     panel.webview.html = dashboardHtml(panel.webview, context.extensionUri);
     panel.webview.onDidReceiveMessage(message => {
       if (message?.type === 'ready') refresh();
+      if (message?.action === 'subscriptionMode' && ['monthly', 'startDate'].includes(message.value)) {
+        void run(async () => {
+          await vscode.workspace.getConfiguration('antigravityUsage').update('subscriptionMarker', message.value, vscode.ConfigurationTarget.Global);
+          refresh();
+        });
+      }
       if (typeof message?.action === 'string' && Object.hasOwn(actions, message.action)) void run(actions[message.action]!);
     }, undefined, context.subscriptions);
     panel.onDidDispose(() => { panel = undefined; }, undefined, context.subscriptions);
   }
   const commands: Record<string, () => void | Promise<unknown>> = {
     openDashboard, selectModel, startTimer: start, finishTimer: () => finish(),
-    cancelTimer: () => finish(true), exportData, clearData: clear, inspectIntegration,
+    cancelTimer: () => finish(true), exportData, clearData: clear, inspectIntegration, setSubscriptionDate,
   };
   for (const [name, action] of Object.entries(commands)) {
     context.subscriptions.push(vscode.commands.registerCommand(`antigravityUsage.${name}`, () => run(action)));
@@ -168,10 +197,17 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
     },
   });
   monitor.setPaused(!storageHealthy);
-  context.subscriptions.push(monitor);
-  const timer = setInterval(() => { refresh(); void monitor.tick(); }, 1000);
+  const quotaMonitor = new QuotaMonitor({
+    target: () => vscode.extensions.getExtension(TARGET_ID),
+    changed: value => { quota = value; refresh(); },
+  });
+  context.subscriptions.push(monitor, quotaMonitor, vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('antigravityUsage')) refresh();
+  }));
+  const timer = setInterval(() => { refresh(); void monitor.tick(); void quotaMonitor.tick(); }, 1000);
   context.subscriptions.push({ dispose: () => { clearInterval(timer); panel?.dispose(); } });
   void monitor.tick();
+  void quotaMonitor.tick();
   refresh();
   return {
     version: 1,

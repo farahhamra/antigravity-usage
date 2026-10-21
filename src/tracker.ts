@@ -192,9 +192,9 @@ export class Tracker {
       const endedAt = r.endedAt === undefined ? undefined : timestamp(r.endedAt);
       if (!['manual', 'integration'].includes(String(r.source))
         || !['running', 'completed', 'failed', 'cancelled', 'interrupted'].includes(String(r.status))
-        || updatedAt < startedAt || (endedAt !== undefined && (endedAt < startedAt || endedAt !== updatedAt))
+        || updatedAt < startedAt || (endedAt !== undefined && (endedAt < startedAt || endedAt > updatedAt))
         || (['completed', 'failed', 'cancelled'].includes(String(r.status)) && endedAt === undefined)
-        || (['running', 'interrupted'].includes(String(r.status)) && endedAt !== undefined)) {
+        || (r.status === 'running' && endedAt !== undefined)) {
         throw new Error('Invalid saved request.');
       }
       const record: RequestRecord = {

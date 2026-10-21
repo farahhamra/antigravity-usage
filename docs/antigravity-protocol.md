@@ -21,6 +21,8 @@ Relevant protobuf JSON fields:
 | `CortexStepGeneratorMetadata` | `stepIndices`, `chatModel` |
 | `ChatModelMetadata` | `modelDisplayName`, `responseModel`, `usage` |
 | `ModelUsageStats` | `inputTokens`, `outputTokens` (protobuf uint64, often JSON strings) |
+| `GetUserStatus` response | `userStatus.cascadeModelConfigData.clientModelConfigs`: `label`, `disabled`, `quotaInfo.remainingFraction`, `quotaInfo.resetTime` |
+| `RetrieveUserQuotaSummary` response | `response.groups`: `displayName`, `buckets[].remainingFraction`, `buckets[].window`, `buckets[].displayName`, `buckets[].resetTime` |
 
 The selected model in an idle model picker is not present in these observations. `modelCost` and credit fields have no established USD meaning here. Separate cache and reasoning fields are not blindly summed into input/output totals.
 
@@ -28,11 +30,12 @@ The selected model in an idle model picker is not present in these observations.
 
 - [agent-pet's Antigravity activity adapter](https://github.com/merttalhayener/agent-pet/blob/main/src/antigravity-activity.cjs): Google extension discovery, exported connection, `JetboxSubscribeToSummaries`, Connect framing, conversation routing IDs, and stale lifecycle handling.
 - [antigravity-token-monitor](https://github.com/ddarkr/antigravity-token-monitor): `GetCascadeTrajectoryGeneratorMetadata` and its `generatorMetadata` response field.
+- [ag-usage](https://github.com/crsxmilitaru/ag-usage/blob/main/src/api.ts): `RetrieveUserQuotaSummary` and `GetUserStatus` quota responses. `ClientModelConfig` and `QuotaInfo` are also present in the official package's protobuf descriptors. Shared-group response fields are based on this independent reference.
 
-The implementation here is original and intentionally limited to those two read-only endpoints. It does not use third-party process scanning, transcript retrieval, message-flushing methods, TLS bypasses, or heuristic recursive token extraction.
+The implementation here is original and limited to those four read-only endpoints. It does not use third-party process scanning, transcript retrieval, message-flushing methods, TLS bypasses, or heuristic recursive token extraction. Model labels and shared groups stay separate; no category/name heuristics infer which model spends which quota. Quota fractions must fall within [0, 1]; missing or invalid values remain unknown.
 
 ## Validation and compatibility
 
-Tests use synthetic protobuf JSON, fragmented Connect envelopes, and an actual loopback HTTP fixture to verify authentication, request bodies, bounded framing, token attribution, delayed updates, safe failure, and cancellation. The full Electron extension host and an authenticated Antigravity backend remain untested in cloud.
+Tests use synthetic protobuf JSON, fragmented Connect envelopes, and actual loopback HTTP fixtures to verify authentication, request bodies, bounded framing, token attribution, saved interruption timing, quota parsing/polling, stale readings, delayed updates, safe failure, and cancellation. The full Electron extension host and an authenticated Antigravity backend remain untested in cloud.
 
 If Google changes the exports or endpoints, the dashboard reports unavailable/retrying status. Timing can continue if summaries work while token metadata does not. No estimated token numbers are substituted. Install the VSIX alongside Google Antigravity and send a new request to validate provider compatibility on the target machine.

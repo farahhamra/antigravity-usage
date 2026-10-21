@@ -75,18 +75,26 @@ export class AntigravityMonitor implements Disposable {
       const current = this.options.tracker.get(parsed.id);
       if (!current && parsed.startedAt < this.since) continue; // Do not import old account history or replay pruned rows.
       if (current && parsed.updatedAt < current.updatedAt) continue;
+      if (current?.status === 'interrupted' && current.endedAt !== undefined && parsed.status === 'running') continue;
       if (current?.endedAt !== undefined && parsed.status === 'running' && parsed.updatedAt <= current.updatedAt) continue;
       // On reconnect, a persisted RUNNING flag alone is not proof an old execution is alive.
       if (current?.status === 'interrupted' && parsed.status === 'running' && parsed.updatedAt <= current.updatedAt) continue;
       // A later user input supplies the upper step bound for the preceding turn.
-      for (const turn of this.turns.values()) {
-        if (turn.conversationId !== conversationId || turn.stepIndex >= parsed.stepIndex) continue;
-        turn.endStep = Math.min(turn.endStep ?? Infinity, parsed.stepIndex);
-        const old = this.options.tracker.get(turn.id);
-        if (old?.status === 'running') {
-          changed = this.options.tracker.syncAntigravity({ ...old, status: 'interrupted' }) || changed;
+      for (const old of this.options.tracker.list()) {
+        if (old.antigravity?.conversationId !== conversationId || old.antigravity.stepIndex >= parsed.stepIndex
+          || old.startedAt > parsed.startedAt) continue;
+        let turn = this.turns.get(old.id);
+        // Only close a turn known to be running. Older interrupted history has no reliable stop time.
+        if (old.status === 'running') {
+          changed = this.options.tracker.syncAntigravity({ ...old, status: 'interrupted',
+            endedAt: parsed.startedAt, updatedAt: Math.max(old.updatedAt, parsed.startedAt) }) || changed;
+          if (!turn) {
+            turn = { id: old.id, conversationId, stepIndex: old.antigravity.stepIndex, pollAt: 0, settleUntil: now + 30000 };
+            this.turns.set(old.id, turn);
+          }
           turn.settleUntil = now + 30000;
         }
+        if (turn) turn.endStep = Math.min(turn.endStep ?? Infinity, parsed.stepIndex);
       }
       const record: RequestRecord = {
         ...current, id: parsed.id, model: current?.model ?? 'Awaiting model', source: 'integration',
@@ -97,6 +105,7 @@ export class AntigravityMonitor implements Disposable {
       // A completed turn's duration stays fixed while final metadata arrives.
       if (current?.endedAt !== undefined && parsed.status !== 'running') {
         record.endedAt = current.endedAt; record.updatedAt = current.updatedAt;
+        if (current.status === 'interrupted') record.status = 'interrupted';
       }
       changed = this.options.tracker.syncAntigravity(record) || changed;
       if (!this.options.tracker.get(parsed.id)) continue;

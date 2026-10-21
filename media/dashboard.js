@@ -31,14 +31,139 @@
   }
   let snapshot;
   const previous = vscode.getState();
+  const dateKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  function localDate(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(year, month - 1, day, 12);
+    return year >= 1000 && year <= 9999 && dateKey(date) === value ? date : undefined;
+  }
+  let calendarMonth = localDate(`${previous?.calendarMonth}-01`) ? previous.calendarMonth : undefined;
+  let calendarCache;
+  let selectedDay;
+  const saveView = () => vscode.setState({ range: byId('range').value, calendarMonth });
   if (['today', 'week', 'all'].includes(previous?.range)) byId('range').value = previous.range;
-  for (const action of ['start', 'finish', 'cancel', 'select', 'export', 'clear', 'inspect']) {
+  for (const action of ['start', 'finish', 'cancel', 'select', 'export', 'clear', 'inspect', 'subscription', 'refreshQuota']) {
     byId(action).addEventListener('click', () => vscode.postMessage({ action }));
   }
   byId('range').addEventListener('change', () => {
-    vscode.setState({ range: byId('range').value });
+    saveView();
     render();
   });
+  for (const [id, direction] of [['calendar-prev', -1], ['calendar-next', 1], ['calendar-today', 0]]) {
+    byId(id).addEventListener('click', () => {
+      if (!snapshot) return;
+      const month = direction ? localDate(`${calendarMonth}-01`) : new Date(snapshot.now);
+      if (direction) month.setMonth(month.getMonth() + direction);
+      if (month.getFullYear() < 1000 || month.getFullYear() > 9999) return;
+      calendarMonth = dateKey(month).slice(0, 7); selectedDay = undefined;
+      saveView(); render();
+    });
+  }
+  byId('subscription-marker').addEventListener('change', () => {
+    vscode.postMessage({ action: 'subscriptionMode', value: byId('subscription-marker').value });
+  });
+
+  function renderQuotas() {
+    const quota = snapshot.quota || { state: 'waiting', entries: [], refreshing: false };
+    const updated = quota.updatedAt ? new Date(quota.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined;
+    const stale = quota.state === 'stale' || (quota.updatedAt !== undefined && snapshot.now - quota.updatedAt > 90000);
+    text('quota-status', stale ? `Last known limits${updated ? ` · updated ${updated}` : ''} · waiting for a fresh provider report`
+      : quota.state === 'ready' ? `Updated ${updated}${quota.refreshing ? ' · refreshing…' : ''}`
+      : quota.state === 'loading' ? 'Reading model limits…'
+      : quota.state === 'unavailable' ? 'Antigravity has not provided model limits. Retrying automatically.'
+      : 'Open Antigravity to see model limits.');
+    byId('refreshQuota').disabled = quota.refreshing;
+    const cards = byId('quotas'); cards.replaceChildren();
+    for (const entry of quota.entries) {
+      const card = element('article', undefined, `quota-card${stale ? ' stale' : ''}`);
+      const heading = element('div', undefined, 'quota-title');
+      heading.append(element('h3', entry.label), element('span', entry.scope === 'group' ? 'Shared limit' : 'Model', 'badge'));
+      card.append(heading);
+      if (entry.disabled) card.append(element('p', 'Model unavailable', 'muted'));
+      for (const window of entry.windows) {
+        const section = element('div', undefined, 'quota-window');
+        const remaining = window.remainingFraction;
+        const known = typeof remaining === 'number' && Number.isFinite(remaining) && remaining >= 0 && remaining <= 1;
+        const line = element('div', undefined, 'quota-line');
+        line.append(element('span', window.label, 'muted'));
+        if (known) {
+          const remainingPercent = Math.round(remaining * 1000) / 10;
+          const usedPercent = Math.round((1 - remaining) * 1000) / 10;
+          line.append(element('strong', `${remainingPercent}% remaining`));
+          const meter = element('meter', undefined, remaining === 0 ? 'exhausted' : remaining <= 0.1 ? 'low' : '');
+          meter.min = 0; meter.max = 100; meter.value = usedPercent;
+          meter.setAttribute('aria-label', `${entry.label}, ${window.label}: ${usedPercent}% used, ${remainingPercent}% remaining`);
+          section.append(line, meter);
+          section.append(element('small', `${usedPercent}% used${entry.disabled ? '' : remaining === 0 ? ' · Limit reached' : remaining <= 0.1 ? ' · Running low' : ' · Available'}`));
+        } else { line.append(element('span', 'Quota not reported')); section.append(line); }
+        if (window.resetAt !== undefined) {
+          const until = window.resetAt - snapshot.now;
+          const reset = element('small', until > 0 ? `Resets in ${duration(until)}` : 'Reset due · waiting for provider update');
+          reset.title = `Provider reset: ${new Date(window.resetAt).toLocaleString()}`;
+          section.append(reset);
+        }
+        card.append(section);
+      }
+      cards.append(card);
+    }
+  }
+
+  function renderCalendar() {
+    calendarMonth ??= dateKey(new Date(snapshot.now)).slice(0, 7);
+    const month = localDate(`${calendarMonth}-01`);
+    const year = month.getFullYear(); const index = month.getMonth();
+    const dayCount = new Date(year, index + 1, 0).getDate();
+    const today = dateKey(new Date(snapshot.now));
+    const subscription = snapshot.subscription || {};
+    const start = localDate(subscription.startDate);
+    const monthly = subscription.marker !== 'startDate';
+    const markerDay = start ? Math.min(start.getDate(), dayCount) : undefined;
+    const monthRecords = snapshot.records.filter(r => dateKey(new Date(r.startedAt)).startsWith(`${calendarMonth}-`));
+    const days = Array.from({ length: dayCount }, (_, i) => {
+      const date = new Date(year, index, i + 1, 12); const key = dateKey(date);
+      const records = monthRecords.filter(r => dateKey(new Date(r.startedAt)) === key);
+      const marker = start && (key === subscription.startDate || (monthly && key >= subscription.startDate && i + 1 === markerDay));
+      return { date, key, records, marker, input: sum(records, 'inputTokens'), output: sum(records, 'outputTokens') };
+    });
+    const cache = JSON.stringify([calendarMonth, today, subscription, selectedDay, days.map(day => [day.key, day.records.length, day.input, day.output, day.records.some(r => r.usagePartial)])]);
+    if (cache === calendarCache) return;
+    calendarCache = cache;
+    const focused = document.activeElement?.dataset?.date;
+    const title = month.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    text('calendar-month', title);
+    byId('calendar-prev').disabled = year === 1000 && index === 0;
+    byId('calendar-next').disabled = year === 9999 && index === 11;
+    const chart = byId('chart'); chart.replaceChildren(); chart.setAttribute('aria-label', `${title} activity`);
+    const offset = (month.getDay() + 6) % 7;
+    for (let i = 0; i < offset; i++) { const blank = element('span', undefined, 'calendar-blank'); blank.setAttribute('aria-hidden', 'true'); chart.append(blank); }
+    const max = Math.max(1, ...days.map(day => day.records.length));
+    const details = day => {
+      const count = day.records.length;
+      const partial = day.records.some(r => r.usagePartial) || day.input.known < count || day.output.known < count;
+      return `${day.date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}: ${number(count)} ${count === 1 ? 'request' : 'requests'}`
+        + (count ? ` · ${number(day.input.value)} input / ${number(day.output.value)} output tokens${partial ? ' · partial token data' : ''}` : '')
+        + (day.marker ? day.key === subscription.startDate ? ' · Subscription started' : ' · Subscription day' : '');
+    };
+    for (const day of days) {
+      const level = day.records.length ? Math.ceil(day.records.length / max * 4) : 0;
+      const cell = element('button', undefined, `calendar-day heat-${level}${day.key === today ? ' today' : ''}${day.marker ? ' subscription-day' : ''}${day.key > today ? ' future' : ''}`);
+      cell.dataset.date = day.key; cell.dataset.count = String(day.records.length);
+      cell.setAttribute('aria-label', details(day)); cell.title = details(day);
+      cell.setAttribute('aria-pressed', String(selectedDay === day.key));
+      if (day.key === today) cell.setAttribute('aria-current', 'date');
+      cell.append(element('span', String(day.date.getDate()), 'calendar-day-number'));
+      if (day.marker) { const marker = element('span', '◆', 'subscription-symbol'); marker.setAttribute('aria-hidden', 'true'); cell.append(marker); }
+      cell.addEventListener('click', () => { selectedDay = day.key; renderCalendar(); });
+      chart.append(cell);
+    }
+    const selected = days.find(day => day.key === selectedDay);
+    text('activity-detail', selected ? details(selected) : `${number(monthRecords.length)} requests in ${title}. Select a day for details.`);
+    text('subscription', start ? `Subscription · ${start.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}` : 'Add subscription date');
+    byId('subscription-marker').value = monthly ? 'monthly' : 'startDate';
+    text('subscription-note', start ? monthly ? '◆ Subscription day each month; shorter months use their last day.' : '◆ Original subscription start date.' : 'Add your start date to mark it on the calendar.');
+    if (focused) chart.querySelector(`[data-date="${focused}"]`)?.focus({ preventScroll: true });
+  }
   function render() {
     if (!snapshot) return;
     const all = snapshot.records;
@@ -100,21 +225,7 @@
     const cost = sum(records, 'costUsd');
     text('cost', cost.value === null ? '—' : cost.value.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }));
     text('cost-coverage', coverage(cost, records.length));
-    const days = [];
-    for (let offset = 6; offset >= 0; offset--) {
-      const date = new Date(dayStart(now)); date.setDate(date.getDate() - offset);
-      days.push({ date, count: all.filter(r => dayStart(r.startedAt) === date.getTime()).length });
-    }
-    const max = Math.max(1, ...days.map(d => d.count));
-    const chart = byId('chart'); chart.replaceChildren();
-    for (const day of days) {
-      const cell = element('div', undefined, 'day');
-      const meter = element('meter');
-      meter.min = 0; meter.max = max; meter.value = day.count;
-      meter.setAttribute('aria-label', `${day.date.toLocaleDateString()}: ${day.count} requests`);
-      cell.append(element('strong', number(day.count)), meter, element('span', day.date.toLocaleDateString(undefined, { weekday: 'short' })));
-      chart.append(cell);
-    }
+    renderQuotas(); renderCalendar();
     const models = byId('models'); models.replaceChildren();
     const groups = new Map();
     for (const record of records) {

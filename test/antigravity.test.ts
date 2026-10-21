@@ -36,7 +36,7 @@ function fixture() {
     metadata: async (_connection, conversation) => { polls++; assert.equal(conversation, id); return metadata; },
   });
   return {
-    tracker, monitor, send: (value = summaryData()) => receives({ updates: { [id]: value } }),
+    tracker, monitor, send: (value: unknown = summaryData()) => receives({ updates: { [id]: value } }),
     raw: (value: unknown) => receives(value), close: () => closes(),
     time: (value: number) => { now = value; }, metadata: (value: unknown) => { metadata = value; },
     target: (value?: Target) => { target = value; }, live: () => live, polls: () => polls, connections: () => connections,
@@ -119,6 +119,56 @@ test('tracks two full requests, final metadata arrives late, and repeated snapsh
     const restored = new Tracker(); restored.restore(f.tracker.serialize());
     assert.deepEqual(restored.totals(), f.tracker.totals());
     assert.doesNotMatch(JSON.stringify(restored.serialize()), /Private|synthetic-test-token|systemPrompt/);
+  } finally { f.monitor.dispose(); }
+});
+
+test('a new question saves the interrupted duration, retains tokens, and never reopens the prior turn', async () => {
+  const f = fixture();
+  try {
+    await f.monitor.tick(); f.time(2000); f.send();
+    f.metadata({ generatorMetadata: [generation([1])] }); await f.monitor.tick();
+    const firstId = f.tracker.list()[0]!.id;
+    f.time(8000); f.send(summaryData(6000, 8000, 5)); // Receipt is later than the actual interruption.
+    const first = f.tracker.get(firstId)!;
+    assert.equal(first.status, 'interrupted'); assert.equal(first.endedAt, 6000);
+    assert.equal(first.endedAt! - first.startedAt, 5000); assert.equal(first.inputTokens, 100);
+    f.metadata({ generatorMetadata: [generation([1], '100', '25'), generation([6], '50', '5')] });
+    await f.monitor.tick();
+    assert.equal(f.tracker.get(firstId)?.outputTokens, 25);
+    assert.equal(f.tracker.get(firstId)?.endedAt, 6000);
+    f.time(10000); f.send(summaryData(1000, 10000, 0));
+    assert.equal(f.tracker.get(firstId)?.status, 'interrupted');
+    assert.equal(f.tracker.get(firstId)?.endedAt, 6000);
+    f.send(summaryData(1000, 10000, 0, 1));
+    assert.equal(f.tracker.get(firstId)?.status, 'interrupted');
+    assert.equal(f.tracker.get(firstId)?.endedAt, 6000);
+    const restored = new Tracker(); restored.restore(f.tracker.serialize());
+    assert.equal(restored.get(firstId)?.endedAt, 6000);
+    assert.equal(restored.get(firstId)?.inputTokens, 100); assert.equal(restored.get(firstId)?.outputTokens, 25);
+  } finally { f.monitor.dispose(); }
+});
+
+test('provider interruption timestamps are saved, and repeated terminal updates leave duration fixed', async () => {
+  const f = fixture();
+  try {
+    await f.monitor.tick(); f.time(2000); f.send();
+    f.time(7000); f.send({ ...summaryData(1000, 5000), interrupted: true });
+    assert.equal(f.tracker.list()[0]?.status, 'interrupted'); assert.equal(f.tracker.list()[0]?.endedAt, 5000);
+    f.time(10000); f.send({ ...summaryData(1000, 10000), interrupted: true });
+    assert.equal(f.tracker.list()[0]?.endedAt, 5000);
+    const restored = new Tracker(); restored.restore(f.tracker.serialize());
+    assert.equal(restored.list()[0]?.endedAt, 5000);
+  } finally { f.monitor.dispose(); }
+});
+
+test('a new question does not fabricate a duration for older interrupted history after reload', async () => {
+  const f = fixture();
+  try {
+    await f.monitor.tick(); f.time(2000); f.send();
+    const saved = f.tracker.serialize(); f.monitor.reset(); f.tracker.restore(saved);
+    await f.monitor.tick(); f.time(8000); f.send(summaryData(6000, 8000, 5));
+    const old = f.tracker.list().find(record => record.startedAt === 1000)!;
+    assert.equal(old.endedAt, undefined); assert.equal(old.status, 'interrupted');
   } finally { f.monitor.dispose(); }
 });
 
