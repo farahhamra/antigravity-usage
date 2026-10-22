@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 import { Tracker } from '../src/tracker';
+import { groupQuotaFamilies } from '../src/antigravity/quota';
 
 function dashboard() {
   const exported: Record<string, any> = {};
@@ -165,20 +166,28 @@ test('non-leap February has 28 days and a recurring marker on the last day', () 
   } finally { page.dom.window.close(); }
 });
 
-test('quota cards show actual remaining/used percentages, exhausted limits, resets and stale data', () => {
+test('one quota panel shows three family rows, weekly/five-hour limits, resets and stale data', () => {
   const page = dashboard();
   try {
     const now = Date.now();
-    const quota = { state: 'ready', refreshing: false, updatedAt: now, entries: [
-      { label: '<img src=x onerror=alert(1)>', scope: 'model', windows: [{ label: 'Model limit', remainingFraction: 0.75, resetAt: now + 3600000 }] },
-      { label: 'Claude', scope: 'model', windows: [{ label: 'Model limit', remainingFraction: 0 }] },
-      { label: 'Other', scope: 'model', windows: [{ label: 'Model limit' }] },
-      { label: 'Shared premium', scope: 'group', windows: [{ label: 'Weekly', remainingFraction: 0.1, resetAt: now - 1 }] },
-    ] };
+    const quota = { state: 'ready', refreshing: false, updatedAt: now, entries: groupQuotaFamilies([
+      { label: 'Gemini Flash 3.8 High', scope: 'group', windows: [{ label: 'Weekly limit', period: 'weekly', remainingFraction: 0.75, resetAt: now + 3600000 }] },
+      { label: 'Gemini 3.8 Flash Low', scope: 'group', windows: [{ label: 'Weekly limit', period: 'weekly', remainingFraction: 0.75 }] },
+      { label: 'Gemini Argon 4 (1M)', scope: 'group', windows: [{ label: '5-hour limit', period: '5h', remainingFraction: 0 }] },
+      { label: '<img src=x onerror=alert(1)>', scope: 'group', windows: [{ label: 'Weekly limit', period: 'weekly', remainingFraction: 0.1, resetAt: now - 1 }] },
+    ]) };
     page.send(new Tracker(), now, true, undefined, { quota });
     assert.match(page.text('quotas')!, /75% remaining/); assert.match(page.text('quotas')!, /25% used/);
     assert.match(page.text('quotas')!, /Limit reached/); assert.match(page.text('quotas')!, /Quota not reported/);
-    assert.match(page.text('quotas')!, /Shared limit/); assert.match(page.text('quotas')!, /Reset due/);
+    assert.match(page.text('quotas')!, /Reset due/);
+    const doc = page.dom.window.document;
+    assert.equal(doc.querySelectorAll('#quotas').length, 1);
+    assert.equal(doc.querySelectorAll('.quota-card').length, 0);
+    assert.equal(doc.querySelectorAll('.quota-row').length, 3);
+    assert.equal(doc.querySelectorAll('.quota-window').length, 6);
+    assert.deepEqual(Array.from(doc.querySelectorAll('.quota-title h3'), el => el.textContent), ['Gemini Flash 3.8', 'Gemini Argon 4', 'Other models']);
+    assert.doesNotMatch(page.text('quotas')!, /High|Low|1M|img/);
+    for (const row of doc.querySelectorAll('.quota-row')) { assert.match(row.textContent!, /Weekly/); assert.match(row.textContent!, /5 hours/); }
     assert.equal((page.dom.window.document.querySelector('.quota-window meter') as HTMLMeterElement).value, 25);
     assert.equal(page.dom.window.document.querySelectorAll('img').length, 0);
     page.send(new Tracker(), now + 100000, true, undefined, { quota });

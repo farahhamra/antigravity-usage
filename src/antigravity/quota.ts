@@ -2,8 +2,15 @@ import { object } from './protocol';
 import { Connection, connectionFrom, quotaSummary, userStatus } from './transport';
 import type { Target } from './monitor';
 
-export interface QuotaWindow { label: string; remainingFraction?: number; resetAt?: number }
+export interface QuotaWindow {
+  label: string;
+  period?: 'weekly' | '5h';
+  remainingFraction?: number;
+  resetAt?: number;
+  lowestReported?: boolean;
+}
 export interface QuotaEntry { label: string; scope: 'model' | 'group'; disabled?: boolean; windows: QuotaWindow[] }
+export interface QuotaFamily { label: string; windows: QuotaWindow[]; unclassified?: QuotaWindow }
 export interface QuotaSnapshot {
   state: 'waiting' | 'loading' | 'ready' | 'stale' | 'unavailable';
   entries: QuotaEntry[];
@@ -43,15 +50,50 @@ export function parseQuotaGroups(raw: unknown): QuotaEntry[] {
   return groups.slice(0, 100).flatMap(rawGroup => {
     const group = object(rawGroup); const name = label(group.displayName);
     if (!name || !Array.isArray(group.buckets)) return [];
-    const windows = group.buckets.slice(0, 10).map(rawBucket => {
+    const windows: QuotaWindow[] = group.buckets.slice(0, 10).map(rawBucket => {
       const bucket = object(rawBucket);
       const window = label(bucket.window);
       return {
         label: window === '5h' ? '5-hour limit' : window === 'weekly' ? 'Weekly limit' : label(bucket.displayName) ?? window ?? 'Shared limit',
+        period: window === 'weekly' || window === '5h' ? window : undefined,
         remainingFraction: fraction(bucket.remainingFraction), resetAt: resetTime(bucket.resetTime),
       };
     });
     return windows.length ? [{ label: name, scope: 'group' as const, windows }] : [];
+  });
+}
+
+/** Presentation only: effort/context variants share a row; percentages are never added. */
+export function groupQuotaFamilies(entries: QuotaEntry[]): QuotaFamily[] {
+  const families = ['Gemini Flash 3.8', 'Gemini Argon 4', 'Other models'];
+  const familyIndex = (name: string): number => {
+    if (/\bgemini\b/i.test(name)) {
+      if (/\bflash\b/i.test(name) && /\b3\.8\b/.test(name)) return 0;
+      if (/\bargon\b/i.test(name) && /\b4(?:\.0)?\b/.test(name)) return 1;
+    }
+    return 2;
+  };
+  const merge = (windows: QuotaWindow[], name: string, period?: QuotaWindow['period']): QuotaWindow => {
+    const known = windows.filter(w => fraction(w.remainingFraction) !== undefined);
+    // Choose a complete reading, so its reset timestamp belongs to the displayed fraction.
+    const lowest = known.reduce<QuotaWindow | undefined>((result, w) =>
+      !result || w.remainingFraction! < result.remainingFraction! ? w : result, undefined);
+    return {
+      label: name, period, remainingFraction: lowest?.remainingFraction,
+      resetAt: lowest?.resetAt,
+      lowestReported: new Set(known.map(w => w.remainingFraction)).size > 1,
+    };
+  };
+  return families.map((name, index) => {
+    const windows = entries.filter(entry => familyIndex(entry.label) === index).flatMap(entry => entry.windows);
+    const periods = [merge(windows.filter(w => w.period === 'weekly'), 'Weekly', 'weekly'),
+      merge(windows.filter(w => w.period === '5h'), '5 hours', '5h')];
+    const unclassified = merge(windows.filter(w => !w.period), 'Period not reported');
+    return {
+      label: name, windows: periods,
+      unclassified: periods.every(w => w.remainingFraction === undefined) && unclassified.remainingFraction !== undefined
+        ? unclassified : undefined,
+    };
   });
 }
 

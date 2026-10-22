@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as http from 'node:http';
 import { once } from 'node:events';
-import { fetchQuotas, parseModelQuotas, parseQuotaGroups, QuotaMonitor, QuotaSnapshot } from '../src/antigravity/quota';
+import { fetchQuotas, groupQuotaFamilies, parseModelQuotas, parseQuotaGroups, QuotaEntry, QuotaMonitor, QuotaSnapshot } from '../src/antigravity/quota';
 import { subscriptionDate } from '../src/settings';
 
 const modelResponse = (remaining: unknown = '0.75') => ({ userStatus: {
@@ -35,6 +35,49 @@ test('invalid quota numbers never become full or exhausted limits', () => {
     assert.equal(parseModelQuotas(modelResponse(n))[0]?.windows[0]?.remainingFraction, undefined);
   }
   assert.deepEqual(parseModelQuotas({}), []); assert.deepEqual(parseQuotaGroups({ response: { groups: [{}] } }), []);
+});
+
+test('effort/context variants collapse into three families with independent weekly and five-hour windows', () => {
+  const groups = parseQuotaGroups({ response: { groups: [
+    ...['Gemini Flash 3.8 High', 'gemini 3.8 flash low', 'Gemini Flash 3.8 Medium (1M context)'].map(displayName => ({
+      displayName, buckets: [{ window: 'weekly', remainingFraction: 0.75 }, { window: '5h', remainingFraction: 0 }],
+    })),
+    { displayName: 'Gemini 4 Argon High', buckets: [{ window: 'weekly', remainingFraction: 1 }, { window: '5h', remainingFraction: 0.5 }] },
+    { displayName: 'Claude Sonnet', buckets: [{ window: 'weekly', remainingFraction: 0.2 }] },
+    { displayName: 'Claude Opus', buckets: [{ window: 'weekly', remainingFraction: 0.2 }] },
+  ] } });
+  const before = structuredClone(groups);
+  const rows = groupQuotaFamilies(groups);
+  assert.deepEqual(rows.map(r => r.label), ['Gemini Flash 3.8', 'Gemini Argon 4', 'Other models']);
+  assert.deepEqual(rows.map(r => r.windows.map(w => w.remainingFraction)), [[0.75, 0], [1, 0.5], [0.2, undefined]]);
+  assert.ok(rows.every(r => r.windows.length === 2 && r.windows[0]?.label === 'Weekly' && r.windows[1]?.label === '5 hours'));
+  assert.ok(rows.every(r => r.windows.every(w => !w.lowestReported)));
+  assert.deepEqual(groups, before);
+});
+
+test('grouping keeps unclassified periods unknown and never copies generic limits into weekly or five-hour values', () => {
+  const entries: QuotaEntry[] = [{ label: 'Gemini Flash 3.8 High', scope: 'model', windows: [{ label: 'Model limit', remainingFraction: 0.7 }] }];
+  let rows = groupQuotaFamilies(entries);
+  assert.deepEqual(rows[0]?.windows.map(w => w.remainingFraction), [undefined, undefined]);
+  assert.equal(rows[0]?.unclassified?.remainingFraction, 0.7);
+  entries.push(...parseQuotaGroups({ response: { groups: [{ displayName: 'Gemini Flash 3.8', buckets: [
+    { window: 'weekly', remainingFraction: 0.9 }, { window: '5h', remainingFraction: 0.3 },
+  ] }] } }));
+  rows = groupQuotaFamilies(entries);
+  assert.deepEqual(rows[0]?.windows.map(w => w.remainingFraction), [0.9, 0.3]);
+  assert.equal(rows[0]?.unclassified, undefined);
+  assert.equal(groupQuotaFamilies([]).length, 3);
+});
+
+test('differing limits show the lowest complete reading without summing, averaging, or mixing reset times', () => {
+  const rows = groupQuotaFamilies(parseQuotaGroups({ response: { groups: [
+    { displayName: 'Claude Sonnet', buckets: [{ window: 'weekly', remainingFraction: 0.8, resetTime: '2026-10-22T12:00:00Z' }] },
+    { displayName: 'Claude Opus', buckets: [{ window: 'weekly', remainingFraction: 0.1, resetTime: '2026-10-23T12:00:00Z' }] },
+    { displayName: 'Unknown', buckets: [{ window: 'weekly' }] },
+  ] } }));
+  assert.equal(rows[2]?.windows[0]?.remainingFraction, 0.1);
+  assert.equal(rows[2]?.windows[0]?.resetAt, Date.parse('2026-10-23T12:00:00Z'));
+  assert.equal(rows[2]?.windows[0]?.lowestReported, true);
 });
 
 test('quota poller refreshes while idle, throttles manual requests, and marks preserved data stale on failure', async () => {

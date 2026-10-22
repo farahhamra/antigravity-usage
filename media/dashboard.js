@@ -74,13 +74,17 @@
       : quota.state === 'unavailable' ? 'Antigravity has not provided model limits. Retrying automatically.'
       : 'Open Antigravity to see model limits.');
     byId('refreshQuota').disabled = quota.refreshing;
-    const cards = byId('quotas'); cards.replaceChildren();
+    const rows = byId('quotas'); rows.replaceChildren();
+    rows.classList.toggle('stale', stale);
     for (const entry of quota.entries) {
-      const card = element('article', undefined, `quota-card${stale ? ' stale' : ''}`);
+      const row = element('div', undefined, 'quota-row');
       const heading = element('div', undefined, 'quota-title');
-      heading.append(element('h3', entry.label), element('span', entry.scope === 'group' ? 'Shared limit' : 'Model', 'badge'));
-      card.append(heading);
-      if (entry.disabled) card.append(element('p', 'Model unavailable', 'muted'));
+      heading.append(element('h3', entry.label));
+      if (entry.unclassified) {
+        heading.append(element('small', `${Math.round(entry.unclassified.remainingFraction * 1000) / 10}% remaining · period not reported`));
+        if (entry.unclassified.lowestReported) heading.append(element('small', 'Lowest reported remaining limit'));
+      }
+      row.append(heading);
       for (const window of entry.windows) {
         const section = element('div', undefined, 'quota-window');
         const remaining = window.remainingFraction;
@@ -95,7 +99,8 @@
           meter.min = 0; meter.max = 100; meter.value = usedPercent;
           meter.setAttribute('aria-label', `${entry.label}, ${window.label}: ${usedPercent}% used, ${remainingPercent}% remaining`);
           section.append(line, meter);
-          section.append(element('small', `${usedPercent}% used${entry.disabled ? '' : remaining === 0 ? ' · Limit reached' : remaining <= 0.1 ? ' · Running low' : ' · Available'}`));
+          section.append(element('small', `${usedPercent}% used${remaining === 0 ? ' · Limit reached' : remaining <= 0.1 ? ' · Running low' : ''}`));
+          if (window.lowestReported) section.append(element('small', 'Lowest reported remaining limit'));
         } else { line.append(element('span', 'Quota not reported')); section.append(line); }
         if (window.resetAt !== undefined) {
           const until = window.resetAt - snapshot.now;
@@ -103,9 +108,9 @@
           reset.title = `Provider reset: ${new Date(window.resetAt).toLocaleString()}`;
           section.append(reset);
         }
-        card.append(section);
+        row.append(section);
       }
-      cards.append(card);
+      rows.append(row);
     }
   }
 

@@ -10,7 +10,7 @@ A VS Code extension for tracking model activity, input/output tokens, and the fu
 - Per-request input/output tokens, model, start time, duration, status, and data source.
 - Automatic whole-request timing and cumulative reported input/output tokens, refreshed approximately every three seconds.
 - Active/latest request model, with usage split by model when a turn uses several models.
-- Live model quota meters: percentage used/remaining, low/exhausted status, and reported reset countdowns. Shared provider limits appear separately.
+- Live model quota meters: percentage used/remaining, low/exhausted status, and reported reset countdowns. One card groups limits into Gemini Flash 3.8, Gemini Argon 4, and Other models, each with weekly and 5-hour values.
 - Manual request timers: start when you send the prompt and finish when the agent finishes its whole response.
 - A monthly contributions-style activity heatmap in the existing color palette, with month navigation, day details, and a recurring subscription-day marker.
 - Per-model comparisons, date filters, and completed/failed/cancelled/interrupted outcomes. A new question that interrupts a running request now saves its elapsed duration, including after reload.
@@ -21,7 +21,7 @@ Missing token counts display **—**, rather than zero. Partial totals show cove
 
 ## Model limits and subscription calendar
 
-**Model usage status** refreshes every 30 seconds, even when no request is running. Use **Refresh limits** to refresh sooner (at most once every five seconds). Bars show the percentage **used**, with the percentage **remaining** beside them. Reset countdowns use provider timestamps. Missing quota stays unavailable; a failed refresh preserves the previous reading and labels it **Last known limits**. Passing a reset time does not automatically assume quota has refilled.
+**Model usage status** refreshes every 30 seconds, even when no request is running. Use **Refresh limits** to refresh sooner (at most once every five seconds). Bars show the percentage **used**, with the percentage **remaining** beside them. Effort/context variants share a row. Duplicate percentages are never added; differing limits show the lowest reported remaining reading, labelled accordingly. Weekly and 5-hour values require explicit provider periods; an unclassified limit is labelled **period not reported** when neither period is available. Reset countdowns use provider timestamps. Missing quota stays unavailable; a failed refresh preserves the previous reading and labels it **Last known limits**. Passing a reset time does not automatically assume quota has refilled.
 
 The calendar shows retained requests by their local start date. Use the arrows to change months, **This month** to return, and select a day for request/token details. Activity intensity is relative to the busiest day in the displayed month.
 
@@ -70,7 +70,7 @@ The built-in adapter:
 - Sums each generation's reported `chatModel.usage.inputTokens` and `outputTokens` once within its turn. Repeated snapshots replace previous totals. Cache/reasoning breakdown fields are not added to these totals; this is the backend's token accounting, not a billing estimate. Missing/ambiguous fields remain unavailable or partial. Credit costs are not treated as USD.
 - Continues querying for 30 seconds after completion to catch delayed usage, without extending the request duration. Later metadata can be missed until reconnection/reload.
 - Displays the **active/latest reported request model**. Changing the idle model picker is not observable through this adapter. Per-model duration is the full duration of requests that involved that model.
-- Observes top-level local conversations exposed by this backend, including conversations for other workspaces if the backend shares them. Cloud sessions and separate subagent token usage are excluded; a parent timer still waits for active children. Historical account usage is unavailable. Model/shared quotas and reset times appear when the backend reports them; no model-to-shared-pool mapping is guessed.
+- Observes top-level local conversations exposed by this backend, including conversations for other workspaces if the backend shares them. Cloud sessions and separate subagent token usage are excluded; a parent timer still waits for active children. Historical account usage is unavailable. Quota display groups labels into Gemini Flash 3.8, Gemini Argon 4, and Other models; effort/context variants share a row. Weekly/5-hour periods and reset times must be reported by the backend.
 
 See [protocol evidence and compatibility notes](docs/antigravity-protocol.md) for the inspected package and source references.
 

@@ -38,14 +38,12 @@ small { display: block; font-size: 11px; }
 .cost { display: block; font-size: 34px; font-weight: 500; margin: 12px 0; }
 .lifetime { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
 .lifetime strong { font-size: 26px; font-weight: 500; font-variant-numeric: tabular-nums; }
-.quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 14px; margin: 16px 0; }
-.quota-card { padding: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); min-width: 0; }
-.quota-card.stale { border-style: dashed; }
-.quota-title, .quota-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.quota-list { margin: 16px 0; }
+.quota-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 1.2fr)); gap: 24px; align-items: start; padding: 18px 0; border-top: 1px solid var(--line); }
+.quota-list.stale .quota-row { border-top-style: dashed; }
 .quota-title h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
-.quota-title .badge { font-size: 10px; color: var(--muted); }
-.quota-window { margin-top: 16px; }
-.quota-line { font-size: 12px; flex-wrap: wrap; }
+.quota-window { min-width: 0; }
+.quota-line { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; flex-wrap: wrap; }
 .quota-line strong { font-variant-numeric: tabular-nums; }
 .quota-window meter { display: block; width: 100%; height: 10px; appearance: none; margin: 9px 0 7px; }
 .quota-window meter::-webkit-meter-bar { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
@@ -94,3 +92,4 @@ footer { font-size: 11px; color: var(--muted); }
 [hidden] { display: none !important; }
 @media (max-width: 760px) { main { padding: 22px 16px; } h1 { font-size: 30px; } .metrics { grid-template-columns: repeat(2, 1fr); } .metrics article { border-bottom: 1px solid var(--line); } .metrics article:nth-child(2) { border-right: 0; } .metrics article:nth-child(3) { border-bottom: 0; } .columns { grid-template-columns: 1fr; gap: 0; } .live-card { align-items: flex-start; flex-direction: column; } .live-actions { justify-content: flex-start; } header { align-items: flex-start; } footer { align-items: flex-start; } }
 @media (prefers-reduced-motion: no-preference) { button { transition: filter .15s; } }
+@media (max-width: 600px) { .quota-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; } .quota-title { grid-column: 1 / -1; } }

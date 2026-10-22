@@ -6,7 +6,7 @@ import { Tracker } from './tracker';
 import { dashboardHtml } from './dashboard';
 import { AntigravityMonitor, LiveStatus } from './antigravity/monitor';
 import { TARGET_ID } from './antigravity/transport';
-import { QuotaMonitor, QuotaSnapshot } from './antigravity/quota';
+import { groupQuotaFamilies, QuotaMonitor, QuotaSnapshot } from './antigravity/quota';
 import { subscriptionDate } from './settings';
 
 export interface UsageApi {
@@ -52,7 +52,7 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
       type: 'snapshot', records, selectedModel: latest?.model ?? tracker.selectedModel,
       selectionSource: latest?.source ?? tracker.selectionSource, integrationSeen, liveStatus, now: Date.now(),
       targetInstalled: !!vscode.extensions.getExtension(TARGET_ID),
-      totals: tracker.totals(), quota,
+      totals: tracker.totals(), quota: { ...quota, entries: groupQuotaFamilies(quota.entries) },
       subscription: {
         startDate: subscriptionDate(config.get('subscriptionStartDate')),
         marker: config.get('subscriptionMarker') === 'startDate' ? 'startDate' : 'monthly',

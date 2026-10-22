@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Consolidate remaining usage into one card with Gemini Flash 3.8, Gemini Argon 4, and Other models rows, each showing weekly and 5-hour limits.
+- Fold effort/context variants into their model family without adding duplicate percentages. Keep unreported periods unknown and label differing readings with the lowest reported remaining limit.
+- Preserve reset countdowns, stale readings, and the existing dashboard palette.
+
 ## 0.3.0
 
 - Add live per-model and shared quota meters with used/remaining percentages, reset countdowns, automatic refresh, and explicit stale/unavailable states.
