@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import { once } from 'node:events';
 import { Tracker } from '../src/tracker';
 import { AntigravityMonitor, LiveStatus, Target } from '../src/antigravity/monitor';
-import { connectionFrom, Frames, generatorMetadata, subscribe } from '../src/antigravity/transport';
+import { connectionFrom, Frames, generatorMetadata, subscribe, transportDetail } from '../src/antigravity/transport';
 import { count, summary, turnUsage } from '../src/antigravity/protocol';
 
 const id = '12345678-1234-1234-1234-123456789abc';
@@ -48,6 +48,26 @@ test('uses only a validated local connection; rejects malformed ports and header
   for (const value of [null, {}, { port: '1234', csrfToken: 'x' }, { port: 65536, csrfToken: 'x' }, { port: 1, csrfToken: 'x\r\nx: y' }]) {
     assert.equal(connectionFrom(value), undefined);
   }
+});
+
+test('the exported port getter follows delayed startup, fixed port 45000, and backend restarts', async () => {
+  let port: number | undefined;
+  let csrfToken = 'synthetic-first';
+  const exports = { get port() { return port; }, get csrfToken() { return csrfToken; } };
+  const connections: number[] = []; let disposals = 0; let state: LiveStatus | undefined;
+  const monitor = new AntigravityMonitor({
+    tracker: new Tracker(), target: () => ({ isActive: true, exports }), changed() {}, status: value => { state = value; },
+    subscribe: connection => { connections.push(connection.port); return { dispose() { disposals++; } }; },
+  });
+  try {
+    await monitor.tick(); assert.equal(state?.state, 'unsupported');
+    port = 45000; await monitor.tick(); assert.deepEqual(connections, [45000]);
+    port = undefined; await monitor.tick(); assert.equal(disposals, 1);
+    port = 45000; csrfToken = 'synthetic-second'; await monitor.tick();
+    assert.deepEqual(connections, [45000, 45000]);
+    csrfToken = 'synthetic-third'; await monitor.tick();
+    assert.deepEqual(connections, [45000, 45000, 45000]); assert.equal(disposals, 2);
+  } finally { monitor.dispose(); }
 });
 
 test('Connect decoder handles fragmented headers, multiple data frames, and end envelopes', () => {
@@ -288,9 +308,48 @@ test('unary errors never disclose server payloads or the CSRF value and cancella
   const connection = { port: (server.address() as import('node:net').AddressInfo).port, csrfToken: 'synthetic-sensitive-value' };
   try {
     await assert.rejects(generatorMetadata(connection, id, new AbortController().signal), error => {
-      assert.doesNotMatch(String(error), /private-response|synthetic-sensitive/); return true;
+      assert.doesNotMatch(String(error), /private-response|synthetic-sensitive/);
+      assert.equal(transportDetail(error), 'GetCascadeTrajectoryGeneratorMetadata: HTTP 403.'); return true;
     });
     const abort = new AbortController(); abort.abort();
     await assert.rejects(generatorMetadata(connection, id, abort.signal));
   } finally { server.closeAllConnections(); server.close(); await once(server, 'close'); }
+});
+
+test('stream failures report safe HTTP diagnostics and recover after the provider accepts requests', async () => {
+  let statusCode = 403;
+  const server = http.createServer((_request, response) => {
+    if (statusCode === 200) {
+      response.writeHead(200, { 'content-type': 'application/connect+json' });
+      response.write(envelope({ updates: {} }));
+    } else {
+      response.writeHead(statusCode, { 'content-type': 'text/html' });
+      response.end('private backend message containing credentials');
+    }
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const connection = { port: (server.address() as import('node:net').AddressInfo).port, csrfToken: 'synthetic-sensitive-value' };
+  let now = 0; let state: LiveStatus | undefined;
+  let changed: () => void = () => {};
+  const monitor = new AntigravityMonitor({
+    tracker: new Tracker(), now: () => now, target: () => ({ isActive: true, exports: connection }),
+    changed() {}, status: value => { state = value; changed(); },
+  });
+  const until = async (expected: LiveStatus['state']) => {
+    if (state?.state === expected) return;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Timed out waiting for monitor')), 2000);
+      changed = () => { if (state?.state === expected) { clearTimeout(timeout); resolve(); } };
+    });
+  };
+  try {
+    await monitor.tick(); await until('retrying');
+    assert.equal(state?.detail, 'JetboxSubscribeToSummaries: HTTP 403.');
+    statusCode = 404; now = 6000; await monitor.tick(); await until('retrying');
+    assert.equal(state?.detail, 'JetboxSubscribeToSummaries: HTTP 404.');
+    assert.doesNotMatch(JSON.stringify(state), /private|credentials|synthetic-sensitive/);
+    statusCode = 200; now = 12000; await monitor.tick(); await until('connected');
+    assert.equal(state?.detail, undefined);
+    assert.equal(transportDetail(new Error('private exception')), undefined);
+  } finally { monitor.dispose(); server.closeAllConnections(); server.close(); await once(server, 'close'); }
 });

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+- Show safe backend failure details in the dashboard and integration inspection: RPC name, HTTP status, or a bounded network/protocol error category.
+- Include configured and exported backend ports in inspection without logging authentication tokens or backend payloads.
+- Verify Antigravity 1.9.0 still exports its configured port and test port 45000, delayed startup, same-port restarts, and authentication-token replacement.
+
+This is a diagnostic update for a reported backend 1.4.6 compatibility failure; it does not claim to resolve that machine's connection issue. Keep the working Antigravity port setting while collecting the diagnostic output.
+
 ## 0.3.1
 
 - Consolidate remaining usage into one card with Gemini Flash 3.8, Gemini Argon 4, and Other models rows, each showing weekly and 5-hour limits.

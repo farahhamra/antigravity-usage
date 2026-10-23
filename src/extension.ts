@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { Tracker } from './tracker';
 import { dashboardHtml } from './dashboard';
 import { AntigravityMonitor, LiveStatus } from './antigravity/monitor';
-import { TARGET_ID } from './antigravity/transport';
+import { connectionFrom, TARGET_ID } from './antigravity/transport';
 import { groupQuotaFamilies, QuotaMonitor, QuotaSnapshot } from './antigravity/quota';
 import { subscriptionDate } from './settings';
 
@@ -137,8 +137,15 @@ export function activate(context: vscode.ExtensionContext): UsageApi {
       output.appendLine(`Active: ${target.isActive}`);
       const exports = target.isActive ? target.exports : undefined;
       output.appendLine(`Public API keys: ${exports && typeof exports === 'object' ? Object.keys(exports).join(', ') || '(none)' : '(not available)'}`);
+      let connection;
+      try { connection = connectionFrom(exports); } catch { /* Provider exports can change during restart. */ }
+      output.appendLine(`Exported backend endpoint: ${connection ? `http://127.0.0.1:${connection.port}` : '(not available)'}`);
+      const configuredPort = vscode.workspace.getConfiguration('antigravity').get<unknown>('serverPort');
+      output.appendLine(`Configured Antigravity port: ${typeof configuredPort === 'number' && Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535 ? configuredPort : '(automatic or not set)'}`);
       output.appendLine(`Local activity connection: ${liveStatus.state}. Usage metadata: ${liveStatus.usage}.`);
+      if (liveStatus.detail) output.appendLine(`Activity diagnostic: ${liveStatus.detail}`);
       output.appendLine(`Model limits: ${quota.state}.`);
+      if (quota.detail) output.appendLine(`Limits diagnostic: ${quota.detail}`);
       output.appendLine('Open Antigravity and send a new request. This observer does not activate it or read account credentials.');
     }
     output.show(true);

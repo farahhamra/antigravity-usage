@@ -1,10 +1,11 @@
 import { Tracker, RequestRecord } from '../tracker';
-import { connectionFrom, Connection, Disposable, generatorMetadata, subscribe } from './transport';
+import { connectionFrom, Connection, Disposable, generatorMetadata, subscribe, transportDetail } from './transport';
 import { object, summary, turnUsage } from './protocol';
 
 export interface LiveStatus {
   state: 'missing' | 'waiting' | 'unsupported' | 'connecting' | 'connected' | 'retrying' | 'paused';
   usage: 'waiting' | 'available' | 'unavailable';
+  detail?: string;
 }
 export interface Target { isActive: boolean; exports?: unknown }
 interface Turn { id: string; conversationId: string; stepIndex: number; endStep?: number; pollAt: number; settleUntil: number }
@@ -37,8 +38,8 @@ export class AntigravityMonitor implements Disposable {
     this.now = options.now ?? Date.now;
     this.since = this.now();
   }
-  private status(state: LiveStatus['state'], usage = this.live.usage): void {
-    const next = { state, usage };
+  private status(state: LiveStatus['state'], usage = this.live.usage, detail?: string): void {
+    const next = { state, usage, detail };
     if (JSON.stringify(next) !== JSON.stringify(this.live)) { this.live = next; this.options.status(next); }
   }
   private disconnect(): void {
@@ -67,7 +68,7 @@ export class AntigravityMonitor implements Disposable {
   private receive(raw: unknown): void {
     const now = this.now();
     const message = object(raw);
-    this.status('connected');
+    this.status('connected', this.live.usage, this.live.detail);
     let changed = false;
     for (const [conversationId, value] of Object.entries(object(message.updates)).slice(0, 10000)) {
       const parsed = summary(conversationId, value, now);
@@ -152,9 +153,9 @@ export class AntigravityMonitor implements Disposable {
         this.stream = (this.options.subscribe ?? subscribe)(connection, message => {
           if (this.disposed || this.generation !== generation) return;
           this.receive(message);
-        }, () => {
+        }, detail => {
           if (this.disposed || this.generation !== generation) return;
-          this.disconnect(); this.retryAt = this.now() + 5000; this.status('retrying');
+          this.disconnect(); this.retryAt = this.now() + 5000; this.status('retrying', 'waiting', detail);
         });
       }
       if (this.live.state !== 'connected') return;
@@ -178,9 +179,9 @@ export class AntigravityMonitor implements Disposable {
           }
           this.status('connected', 'available');
           if (changed) this.options.changed();
-        } catch {
+        } catch (error) {
           if (this.generation !== generation) return;
-          this.status('connected', 'unavailable');
+          this.status('connected', 'unavailable', transportDetail(error) ?? 'Usage metadata format is unavailable.');
         }
       }
     } catch {

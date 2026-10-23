@@ -2,7 +2,7 @@
   "name": "antigravity-usage",
   "displayName": "Antigravity Usage",
   "description": "Live request activity, reported input/output tokens, and a local usage dashboard for Google Antigravity.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "farahhamra",
   "license": "UNLICENSED",
   "repository": {

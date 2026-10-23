@@ -1,5 +1,5 @@
 import { object } from './protocol';
-import { Connection, connectionFrom, quotaSummary, userStatus } from './transport';
+import { Connection, connectionFrom, quotaSummary, transportDetail, userStatus } from './transport';
 import type { Target } from './monitor';
 
 export interface QuotaWindow {
@@ -16,6 +16,7 @@ export interface QuotaSnapshot {
   entries: QuotaEntry[];
   updatedAt?: number;
   refreshing: boolean;
+  detail?: string;
 }
 
 function label(value: unknown): string | undefined {
@@ -99,7 +100,7 @@ export function groupQuotaFamilies(entries: QuotaEntry[]): QuotaFamily[] {
 
 export async function fetchQuotas(connection: Connection, signal: AbortSignal): Promise<QuotaEntry[]> {
   const [models, groups] = await Promise.allSettled([userStatus(connection, signal), quotaSummary(connection, signal)]);
-  if (models.status === 'rejected' && groups.status === 'rejected') throw new Error('Model limits unavailable.');
+  if (models.status === 'rejected' && groups.status === 'rejected') throw models.reason;
   return [
     ...(models.status === 'fulfilled' ? parseModelQuotas(models.value) : []),
     ...(groups.status === 'fulfilled' ? parseQuotaGroups(groups.value) : []),
@@ -151,9 +152,10 @@ export class QuotaMonitor {
       const entries = await (this.options.fetch ?? fetchQuotas)(connection, controller.signal);
       if (this.disposed || controller !== this.controller) return;
       this.publish({ state: entries.length ? 'ready' : 'unavailable', entries, updatedAt: this.now(), refreshing: false });
-    } catch {
+    } catch (error) {
       if (this.disposed || controller !== this.controller) return;
-      this.publish({ ...this.snapshot, state: this.snapshot.entries.length ? 'stale' : 'unavailable', refreshing: false });
+      this.publish({ ...this.snapshot, state: this.snapshot.entries.length ? 'stale' : 'unavailable', refreshing: false,
+        detail: transportDetail(error) ?? 'Model limits unavailable.' });
     } finally { if (this.controller === controller) this.controller = undefined; }
   }
 }

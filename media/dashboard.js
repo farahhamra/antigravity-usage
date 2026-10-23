@@ -73,6 +73,7 @@
       : quota.state === 'loading' ? 'Reading model limits…'
       : quota.state === 'unavailable' ? 'Antigravity has not provided model limits. Retrying automatically.'
       : 'Open Antigravity to see model limits.');
+    if (quota.detail) byId('quota-status').append(document.createTextNode(` ${quota.detail}`));
     byId('refreshQuota').disabled = quota.refreshing;
     const rows = byId('quotas'); rows.replaceChildren();
     rows.classList.toggle('stale', stale);
@@ -211,7 +212,7 @@
         paused: ['Automatic tracking paused', 'Local history could not be read or saved. Inspect the output, export history if needed, then reload the window.'],
       };
       const message = messages[state] || messages.waiting;
-      text('connection', message[0]); text('connection-detail', message[1]);
+      text('connection', message[0]); text('connection-detail', message[1] + (snapshot.liveStatus.detail ? ` ${snapshot.liveStatus.detail}` : ''));
     } else if (snapshot.integrationSeen) {
       text('connection', 'Integration events received this session');
       text('connection-detail', 'Displaying events supplied through the extension API. Coverage below shows which requests include token data.');

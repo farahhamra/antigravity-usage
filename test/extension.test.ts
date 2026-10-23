@@ -13,6 +13,7 @@ function activate(saved?: unknown) {
   const messages: any[] = [];
   const log: string[] = [];
   let now = 1000;
+  let targetActive = false;
   let input: string | undefined = 'Manual model';
   let configurationChanged: (event: any) => void = () => {};
   const settings = new Map<string, unknown>();
@@ -22,7 +23,9 @@ function activate(saved?: unknown) {
     StatusBarAlignment: { Right: 1 }, ViewColumn: { One: 1 }, ConfigurationTarget: { Global: 1 },
     Uri: { joinPath: (_base: unknown, ...parts: string[]) => parts.join('/'), file: (path: string) => path },
     commands: { registerCommand: (id: string, fn: () => Promise<void>) => { commands.set(id, fn); return disposable; } },
-    extensions: { getExtension: (id: string) => id === 'google.google-antigravity' ? { packageJSON: { version: '1.8.0' }, isActive: false } : undefined },
+    extensions: { getExtension: (id: string) => id === 'google.google-antigravity' ? {
+      packageJSON: { version: '1.9.0' }, isActive: targetActive, exports: { get port() { return 45000; }, csrfToken: 'synthetic-private-token' },
+    } : undefined },
     workspace: {
       getConfiguration: () => ({
         get: (key: string, fallback?: unknown) => settings.get(key) ?? fallback,
@@ -64,6 +67,7 @@ function activate(saved?: unknown) {
   return {
     api, commands, errors, messages, log, settings, saved: () => saved as any,
     input: (value?: string) => { input = value; }, send: (message: unknown) => receive(message),
+    activateTarget: () => { targetActive = true; },
     time: (time: number) => { now = time; }, ready: () => receive({ type: 'ready' }),
     dispose: () => subscriptions.forEach(item => item.dispose()),
   };
@@ -86,6 +90,18 @@ test('activation connects manual commands, storage, dashboard snapshots, and tar
     assert.equal(host.messages.at(-1).totals.requests, 1);
     assert.equal(host.messages.at(-1).integrationSeen, false);
     assert.deepEqual(host.errors, []);
+  } finally { host.dispose(); }
+});
+
+test('integration inspection identifies fixed-port discovery without exposing the authentication token', async () => {
+  const host = activate();
+  try {
+    host.activateTarget(); host.settings.set('serverPort', 45000);
+    await host.commands.get('antigravityUsage.inspectIntegration')!();
+    assert.match(host.log.join('\n'), /Installed version: 1\.9\.0/);
+    assert.match(host.log.join('\n'), /Exported backend endpoint: http:\/\/127\.0\.0\.1:45000/);
+    assert.match(host.log.join('\n'), /Configured Antigravity port: 45000/);
+    assert.doesNotMatch(host.log.join('\n'), /synthetic-private-token/);
   } finally { host.dispose(); }
 });
 

@@ -6,6 +6,29 @@ const MAX_BYTES = 8 * 1024 * 1024;
 export interface Connection { port: number; csrfToken: string }
 export interface Disposable { dispose(): void }
 
+type Method = 'JetboxSubscribeToSummaries' | 'GetCascadeTrajectoryGeneratorMetadata' | 'GetUserStatus' | 'RetrieveUserQuotaSummary';
+type Failure = 'connection refused' | 'connection reset' | 'connection blocked' | 'network error' | 'timed out' | 'cancelled'
+  | 'unexpected response type' | 'invalid response' | 'response too large' | 'stream ended' | 'stream error';
+
+/** Only our fixed diagnostics may cross into the UI; never use server bodies or exception messages. */
+export class TransportError extends Error {
+  constructor(method: Method, failure: Failure | number) {
+    super(`${method}: ${typeof failure === 'number' ? `HTTP ${failure}` : failure}.`);
+  }
+}
+export function transportDetail(error: unknown): string | undefined {
+  return error instanceof TransportError ? error.message : undefined;
+}
+function networkFailure(error: NodeJS.ErrnoException): Failure {
+  switch (error.code) {
+    case 'ECONNREFUSED': return 'connection refused';
+    case 'ECONNRESET': return 'connection reset';
+    case 'EACCES': case 'EPERM': return 'connection blocked';
+    case 'ETIMEDOUT': return 'timed out';
+    default: return 'network error';
+  }
+}
+
 /** Only accept the connection exported by the already active Google extension. */
 export function connectionFrom(exports: unknown): Connection | undefined {
   if (!exports || typeof exports !== 'object') return;
@@ -47,37 +70,36 @@ export class Frames {
   }
 }
 
-export function subscribe(connection: Connection, onMessage: (value: unknown) => void, onClose: () => void): Disposable {
+export function subscribe(connection: Connection, onMessage: (value: unknown) => void, onClose: (detail?: string) => void): Disposable {
   let closed = false;
   let response: http.IncomingMessage | undefined;
   const frames = new Frames();
-  const close = (notify: boolean) => {
+  const close = (notify: boolean, failure: Failure | number = 'stream ended') => {
     if (closed) return;
     closed = true;
     clearTimeout(startup);
     request.destroy(); response?.destroy();
-    if (notify) onClose();
+    if (notify) onClose(new TransportError('JetboxSubscribeToSummaries', failure).message);
   };
   const request = http.request(options(connection, 'JetboxSubscribeToSummaries', true), res => {
     response = res;
-    if (res.statusCode !== 200 || !/^application\/connect\+json(?:;|$)/i.test(res.headers['content-type'] ?? '')) {
-      close(true); return;
-    }
+    if (res.statusCode !== 200) { close(true, res.statusCode ?? 'invalid response'); return; }
+    if (!/^application\/connect\+json(?:;|$)/i.test(res.headers['content-type'] ?? '')) { close(true, 'unexpected response type'); return; }
     res.on('data', (chunk: Buffer) => {
       if (closed) return;
       try {
         for (const frame of frames.push(chunk)) {
-          if (frame.flags === 2) { close(true); return; }
+          if (frame.flags === 2) { close(true, (frame.value as Record<string, unknown>).error ? 'stream error' : 'stream ended'); return; }
           clearTimeout(startup);
           onMessage(frame.value);
         }
-      } catch { close(true); }
+      } catch { close(true, 'invalid response'); }
     });
-    res.on('error', () => close(true)); res.on('end', () => close(true)); res.on('close', () => close(true));
+    res.on('error', error => close(true, networkFailure(error))); res.on('end', () => close(true)); res.on('close', () => close(true));
   });
-  const startup = setTimeout(() => close(true), 5000);
+  const startup = setTimeout(() => close(true, 'timed out'), 5000);
   startup.unref();
-  request.on('error', () => close(true));
+  request.on('error', error => close(true, networkFailure(error)));
   request.end(Buffer.from([0, 0, 0, 0, 2, 123, 125])); // Connect JSON envelope: {}
   return { dispose: () => close(false) };
 }
@@ -96,37 +118,38 @@ export function quotaSummary(connection: Connection, signal: AbortSignal): Promi
 }
 
 /** Keep the read-only method allowlist closed to callers. */
-function unary(connection: Connection, method: 'GetCascadeTrajectoryGeneratorMetadata' | 'GetUserStatus' | 'RetrieveUserQuotaSummary', body: unknown, signal: AbortSignal): Promise<unknown> {
+function unary(connection: Connection, method: Exclude<Method, 'JetboxSubscribeToSummaries'>, body: unknown, signal: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let done = false;
     let response: http.IncomingMessage | undefined;
-    const finish = (value?: unknown, failed = false) => {
+    const finish = (value?: unknown, failure?: Failure | number) => {
       if (done) return;
       done = true; clearTimeout(timeout); signal.removeEventListener('abort', abort);
       request.destroy(); response?.destroy();
-      if (failed) reject(new Error('Antigravity usage data is unavailable.'));
+      if (failure !== undefined) reject(new TransportError(method, failure));
       else resolve(value);
     };
     const request = http.request(options(connection, method), res => {
       response = res;
-      if (res.statusCode !== 200 || !/^application\/json(?:;|$)/i.test(res.headers['content-type'] ?? '')) { finish(undefined, true); return; }
+      if (res.statusCode !== 200) { finish(undefined, res.statusCode ?? 'invalid response'); return; }
+      if (!/^application\/json(?:;|$)/i.test(res.headers['content-type'] ?? '')) { finish(undefined, 'unexpected response type'); return; }
       const chunks: Buffer[] = []; let size = 0;
       res.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_BYTES) finish(undefined, true);
+        if (size > MAX_BYTES) finish(undefined, 'response too large');
         else chunks.push(chunk);
       });
       res.on('end', () => {
         try { finish(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-        catch { finish(undefined, true); }
+        catch { finish(undefined, 'invalid response'); }
       });
-      res.on('error', () => finish(undefined, true));
-      res.on('aborted', () => finish(undefined, true));
+      res.on('error', error => finish(undefined, networkFailure(error)));
+      res.on('aborted', () => finish(undefined, 'connection reset'));
     });
-    const abort = () => finish(undefined, true);
-    const timeout = setTimeout(abort, 5000); timeout.unref();
+    const abort = () => finish(undefined, 'cancelled');
+    const timeout = setTimeout(() => finish(undefined, 'timed out'), 5000); timeout.unref();
     signal.addEventListener('abort', abort, { once: true });
-    request.on('error', abort);
+    request.on('error', error => finish(undefined, networkFailure(error)));
     if (signal.aborted) abort();
     else request.end(JSON.stringify(body));
   });

@@ -123,3 +123,9 @@ After a restart or disconnect, unfinished automatic requests become **interrupte
 For a confirmed interruption, the stop time is the next question's input timestamp or the provider's interruption timestamp. That duration stays fixed while late token metadata arrives and survives reload. Older interrupted records without a stop timestamp, and interruptions caused only by losing the connection, still show an unavailable duration.
 
 See the [roadmap](ROADMAP.md) for completed feature requests. Other ideas for later: usage alerts, cost estimates with configurable prices, and workspace/session breakdowns—each depending on available provider data.
+
+### Troubleshooting after an Antigravity backend update
+
+Keep a working `antigravity.serverPort` setting, including `45000`. Antigravity Usage reads the live port getter exported by Google Antigravity; it does not assume an ephemeral port or need its own port setting. The exported getter was checked in the official 1.9.0 package.
+
+If tracking stops, open the Usage dashboard and select **Inspect installed integration** (or run **Antigravity Usage: Inspect Antigravity Integration**). The output includes the configured/exported port and the latest safe activity/limits diagnostic. Copy that output when reporting an issue. A connection refusal, HTTP 401/403, and HTTP 404 require different investigation; a healthy main Antigravity window alone does not establish that its companion RPCs are available. Backend 1.4.6 compatibility still needs validation in the affected VS Code session.

@@ -26,6 +26,14 @@ Relevant protobuf JSON fields:
 
 The selected model in an idle model picker is not present in these observations. `modelCost` and credit fields have no established USD meaning here. Separate cache and reasoning fields are not blindly summed into input/output totals.
 
+## Antigravity 1.9.0 and fixed ports
+
+Inspected the official 1.9.0 Marketplace package on October 23, 2026 (decoded VSIX SHA-256 `38f2d8c211b76a524cbe16d2259f54fdee88cc8adf23bbd256f37116af664558`). Its activation still returns `{ csrfToken, get port() }`. The server manager reads `antigravity.serverPort`, starts `agy` with `--hub-port`, and assigns that port to the exported getter after readiness succeeds. Consequently, a configured port such as 45000 does not require a separate Usage port override.
+
+The adapter tests delayed getter availability, backend restarts, and authentication-token replacement at the same port. This confirms discovery behavior, not compatibility of a signed-in backend 1.4.6's RPCs. A reported failure after an upgrade needs the actual activity/limits diagnostic before attributing it to the configured port.
+
+Inspection displays only the configured/exported port, extension version, connection state, and fixed diagnostics (RPC name plus HTTP status or an allowlisted failure category). It never includes response bodies, error messages from the provider, or token values. HTTP 401/403 indicates a rejected request; HTTP 404 indicates the requested route was unavailable. Neither result alone proves why the backend rejected the request.
+
 ## Independent protocol references
 
 - [agent-pet's Antigravity activity adapter](https://github.com/merttalhayener/agent-pet/blob/main/src/antigravity-activity.cjs): Google extension discovery, exported connection, `JetboxSubscribeToSummaries`, Connect framing, conversation routing IDs, and stale lifecycle handling.
